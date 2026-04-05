@@ -67,8 +67,8 @@ class Agent:
     def reflect(self) -> None:
         """
         Two-step reflection loop (Stanford Generative Agent style (Park et al., 2023)):
-            1. Generate question worth reflecting on from recent memories.
-            2. For each question, retrieve relevant memories and synthesize as input.
+            1. Generate question worth reflecting on from recent memories (MAX_MEMORIES_SEED).
+            2. For each question, retrieve relevant memories (MAX_MEMORIES_RETRIEVE) and synthesize as input.
             3. Store each insight as high-importance reflection memory. 
         """
 
