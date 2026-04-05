@@ -24,7 +24,7 @@ def main():
 
     # Moderator opens conversation; Alice (agents[0]) responds first
 
-    opening = ("With the recent shifts in the European energy market and the rising costs of household electricity, what is the most sustainable and secure way for Germany to power its industry and homes over the next decade?")
+    opening = ("With the recent surge in migration flows into Europe and the growing pressure on Germany's housing, labor market, and social services, what is the most sustainable and socially cohesive way for Germany to manage and integrate immigration over the next decade?")
 
     print(f"\n Moderator: {opening}\n")
 
