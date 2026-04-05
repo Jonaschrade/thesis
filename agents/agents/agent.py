@@ -141,10 +141,14 @@ class Agent:
             f"{m['speaker']}: {m['content']}" for m in messages
         )
 
-        raw= self.llm.invoke(
+        raw = self.llm.invoke(
             f"You are {self.name}. {self.persona}\n\n"
             f"Here is the conversation so far:\n{transcript}\n\n"
             f"Decide whether the conversation with the current speaker should continue or you move to a different speaker."
+            f"Consider how much social reward you are gaining from this conversation: do you feel heard and validated by the current speaker's agreement," 
+            f"or are you finding little resonance?"
+            f"Favour continuing conversations where your views are met with approval," 
+            f"and moving on when disagreement or indifference reduces your social satisfaction."
             f"Reply in exactly this format:\n"
             f"VOTE: continue\nREASON: <one sentence>\n\n"
             f"or\n\nVOTE: move\nREASON: <one sentence>"
