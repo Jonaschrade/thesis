@@ -24,5 +24,5 @@ WEIGHT_RELEVANCE = 0.4
 # Conversation
 DEFAULT_MAX_ROUNDS = 12 # number of interaction rounds before conversation ends
 
-# Social Feedback
-EVAL_EVERY=4 # trigger social feedback every N rounds
+# Evaluation
+EVAL_EVERY=4 # trigger social feedback evaluation every N rounds

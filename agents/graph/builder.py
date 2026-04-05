@@ -77,7 +77,7 @@ def build_graph(agents: list[Agent]):
     Conversation order follows list order, cycling back to agents[0] after last agent speaks.
 
     Args:
-        agents: list of Agent istances (minimum 2)
+        agents: list of Agent instances (minimum 2)
 
     Returns:
         A compiled LangGraph runnable.
@@ -128,6 +128,6 @@ def build_graph(agents: list[Agent]):
 
     )
 
-    # The first agent in list always responds first 
+    # First agent in list always responds first 
     g.set_entry_point(agents[0].name)
     return g.compile()
