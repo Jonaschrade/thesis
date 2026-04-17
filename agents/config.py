@@ -21,6 +21,9 @@ WEIGHT_RECENCY = 0.3
 WEIGHT_IMPORTANCE = 0.3
 WEIGHT_RELEVANCE = 0.4
 
+# Agents
+NUM_AGENTS = 2 # number of agents to sample and instantiate
+
 # Conversation
 DEFAULT_MAX_ROUNDS = 12 # number of interaction rounds before conversation ends
 
