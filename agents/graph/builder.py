@@ -14,25 +14,14 @@ from graph.router import router, make_reflector_router, eval_router
 from graph.state import State
 from config import EVAL_EVERY, REFLECT_EVERY
 
-def make_node(agent: Agent, next_agent_name: str, num_agents: int,
-              all_agents: list = None):
+def make_node(agent: Agent, next_agent_name: str, num_agents: int):
     """
     Factory that returns a LangGraph node function bound to `agent`.
     The node reads the last message, generates reply, and updates state.
-    When all_agents is provided this node is treated as the round-start node
-    and prints a persona summary before the first agent speaks each round.
     """
 
     def node(state: State) -> State:
         last = state["messages"][-1]
-
-        if all_agents is not None:
-            current_round = state["turn"] // num_agents + 1
-            print(f"\n{'━' * 50}")
-            print(f"Round {current_round}")
-            for a in all_agents:
-                print(f"  {a.name}: {a.persona}")
-            print(f"{'━' * 50}")
 
         new_turn=state["turn"]+1
         new_round=new_turn//num_agents # increment round after all agents have spoken
@@ -103,9 +92,7 @@ def build_graph(agents: list[Agent]):
 
     for i, agent in enumerate(agents):
         next_agent = agents[(i+1) % n]
-        is_first = (i == 0)
-        g.add_node(agent.name, make_node(agent, next_agent.name, n,
-                                         all_agents=agents if is_first else None))
+        g.add_node(agent.name, make_node(agent, next_agent.name, n))
 
     g.add_node("reflector", make_reflector(agents))
     g.add_node("evaluator", make_evaluator(agents))
