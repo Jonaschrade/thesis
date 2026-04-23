@@ -9,6 +9,7 @@ sample_personas(n, llm) -> list[dict]
     construction.
 """
 
+import ast
 import json
 import random
 import re
@@ -19,7 +20,9 @@ _POOL_PATH = Path(__file__).parent / "german_personas.json"
 
 def _load_pool() -> list[dict]:
     with open(_POOL_PATH, encoding="utf-8") as f:
-        return json.load(f)
+        raw = json.load(f)
+    # Entries are stored as Python dict repr strings — parse them back to dicts.
+    return [ast.literal_eval(entry) if isinstance(entry, str) else entry for entry in raw]
 
 
 def _clean_value(value: str) -> str:
