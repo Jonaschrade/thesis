@@ -9,7 +9,7 @@ Multiple AI agents engage in structured conversations, each maintaining individu
 ## Architecture
 
 ```
-agents/      Agent class, persona sampler, and persona pool (200 k entries)
+agents/      Agent class, persona sampler, and persona pool (5 246 German survey records)
 graph/       LangGraph graph construction, routing logic, and shared state schema
 memory/      ChromaDB-backed memory storage and composite scoring algorithm
 config.py    Central configuration (models, weights, thresholds)
@@ -18,10 +18,11 @@ main.py      Entry point
 
 ### Conversation flow
 
-1. Agents take turns responding in a fixed cyclic order.
-2. Every `REFLECT_EVERY` rounds all agents simultaneously reflect, synthesising insights from recent memories.
-3. Every `EVAL_EVERY` rounds all agents vote `continue` or `move`; any `move` vote ends the conversation.
-4. The conversation also ends after `DEFAULT_MAX_ROUNDS` rounds.
+1. At the start of each round the name and persona of every agent are printed.
+2. Agents take turns responding in a fixed cyclic order.
+3. Every `REFLECT_EVERY` rounds all agents simultaneously reflect, synthesising insights from recent memories.
+4. Every `EVAL_EVERY` rounds all agents vote `continue` or `move`; any `move` vote ends the conversation.
+5. The conversation also ends after `DEFAULT_MAX_ROUNDS` rounds.
 
 ### Memory system
 
@@ -52,7 +53,7 @@ source ~/myvenv/bin/activate   # or your own venv
 python main.py
 ```
 
-On startup, `NUM_AGENTS` personas are sampled at random from the pool of ~200 000 role descriptions in `agents/personas.json`. The LLM then expands each one-liner into a full name and 2-3 sentence persona description before the conversation begins.
+On startup, `NUM_AGENTS` personas are sampled at random from `agents/german_personas.json` (5 246 German citizen survey records). The LLM derives a realistic German first name and writes a 2-3 sentence English persona description from each record's demographic and attitudinal attributes before the conversation begins.
 
 ## Key configuration (`config.py`)
 
