@@ -23,6 +23,12 @@ def main():
         Agent(name=p["name"], persona=p["persona"], llm=llm) for p in personas
     ]
 
+    print(f"\n{'━' * 50}")
+    print("Participants")
+    for a in agents:
+        print(f"  {a.name}: {a.persona}")
+    print(f"{'━' * 50}")
+
     graph = build_graph(agents)
 
     opening = (
