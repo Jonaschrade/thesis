@@ -18,11 +18,10 @@ main.py      Entry point
 
 ### Conversation flow
 
-1. At the start of each round the name and persona of every agent are printed.
-2. Agents take turns responding in a fixed cyclic order.
-3. Every `REFLECT_EVERY` rounds all agents simultaneously reflect, synthesising insights from recent memories.
-4. Every `EVAL_EVERY` rounds all agents vote `continue` or `move`; any `move` vote ends the conversation.
-5. The conversation also ends after `DEFAULT_MAX_ROUNDS` rounds.
+1. Agents take turns responding in a fixed cyclic order.
+2. Every `REFLECT_EVERY` rounds all agents simultaneously reflect, synthesising insights from recent memories.
+3. Every `EVAL_EVERY` rounds all agents vote `weiter` or `wechseln`; any `wechseln` vote ends the conversation.
+4. The conversation also ends after `DEFAULT_MAX_ROUNDS` rounds.
 
 ### Memory system
 
@@ -53,7 +52,7 @@ source ~/myvenv/bin/activate   # or your own venv
 python main.py
 ```
 
-On startup, `NUM_AGENTS` personas are sampled at random from `agents/german_personas.json` (5 246 German citizen survey records). The LLM derives a realistic German first name and writes a 2-3 sentence English persona description from each record's demographic and attitudinal attributes before the conversation begins.
+On startup, `NUM_AGENTS` personas are sampled at random from `agents/german_personas.json` (5 246 German citizen survey records). The LLM derives a realistic German first name and writes a 2-3 sentence German persona description (`Du bist …`) from each record's demographic and attitudinal attributes. All agent prompts run in German; agents respond, reflect, and evaluate in German.
 
 ## Key configuration (`config.py`)
 

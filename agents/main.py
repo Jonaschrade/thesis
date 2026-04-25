@@ -1,8 +1,11 @@
 """
-Entry point: Instantiates agents and runs conversation graph.
+Entry point.
+
+Samples personas from the pool, instantiates agents, prints participant
+summaries, and runs the LangGraph conversation loop.
 
 To change the number of agents, edit NUM_AGENTS in config.py.
-To change the LLM model or thresholds, edit config.py.
+To change the LLM model or conversation thresholds, edit config.py.
 """
 
 from langchain_ollama import OllamaLLM
@@ -32,21 +35,27 @@ def main():
     graph = build_graph(agents)
 
     opening = (
-        "With the recent surge in migration flows into Europe and the growing "
-        "pressure on Germany's housing, labor market, and social services, what "
-        "is the most sustainable and socially cohesive way for Germany to manage "
-        "and integrate immigration over the next decade?"
+        "Deutschland hat sich jahrzehntelang wissentlich in eine gefährliche Abhängigkeit "
+        "von autoritären Öl- und Gasstaaten manöviert und dafür die eigene Bevölkerung "
+        "mit explodierenden Energiepreisen bezahlen lassen. Russisches Gas, arabisches Öl - "
+        "jede Kilowattstunde war ein politisches Zugeständnis an Regime, die westliche Werte "
+        "offen ablehnen. Diese fossile Abhängigkeit ist kein Unfall, sondern das Ergebnis von "
+        "Lobbyismus und kurzsichtiger Industriepolitik auf Kosten der Bürger. "
+        "Müssen fossile Energieträger als strategisches Sicherheitsrisiko eingestuft und "
+        "ihr Import mittelfristig vollständig verboten werden?"
     )
 
     print(f"\n Moderator: {opening}\n")
 
+    # agents[0] always speaks first; the graph cycles through agents in list order
     graph.invoke({
-        "messages": [{"speaker": "Moderator", "content": opening}],
-        "next_speaker": agents[0].name,
-        "turn": 0,
-        "round": 0,
-        "max_rounds": DEFAULT_MAX_ROUNDS,
-        "evaluations": []
+        "messages":           [{"speaker": "Moderator", "content": opening}],
+        "conversation_start": 0,
+        "next_speaker":       agents[0].name,
+        "turn":               0,
+        "round":              0,
+        "max_rounds":         DEFAULT_MAX_ROUNDS,
+        "evaluations":        [],
     })
 
     print("\n\n --Conversation complete--")
