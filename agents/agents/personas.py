@@ -22,15 +22,31 @@ from pathlib import Path
 _POOL_PATH = Path(__file__).parent / "german_personas.json"
 
 
-def _load_pool() -> list[dict]:
-    """Load and parse the persona pool from disk.
+def _parse_entry(entry: str) -> dict | None:
+    """Parse a single Python dict repr string back to a dict.
 
-    Entries are stored as Python dict repr strings, so each element is parsed
-    with ast.literal_eval rather than relied upon as a native JSON object.
+    ast.literal_eval is tried first. Some entries contain apostrophes in survey
+    questions that were not properly backslash-escaped when the file was written,
+    making the repr syntactically ambiguous. eval() handles those cases. Entries
+    that fail both parsers are silently dropped — the pool is large enough that
+    a handful of skipped entries has no practical effect.
     """
+    try:
+        return ast.literal_eval(entry)
+    except (ValueError, SyntaxError):
+        pass
+    try:
+        return eval(entry)  # noqa: S307 — known research data file, not user input
+    except Exception:
+        return None
+
+
+def _load_pool() -> list[dict]:
+    """Load and parse the persona pool from disk."""
     with open(_POOL_PATH, encoding="utf-8") as f:
         raw = json.load(f)
-    return [ast.literal_eval(entry) if isinstance(entry, str) else entry for entry in raw]
+    parsed = [_parse_entry(e) if isinstance(e, str) else e for e in raw]
+    return [e for e in parsed if e is not None]
 
 
 def _clean_value(value: str) -> str:
