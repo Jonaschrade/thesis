@@ -1,9 +1,10 @@
 """
-Agent; synthesize persona + memory + reflection.
+Agent: synthesises persona, memory, and reflection into conversational behaviour.
 
 Public API:
-    agent.respond(message, speaker) -> str  called by LangGraph node
-    agent.reflect()                         called internally every REFLECT_EVERY turns
+    agent.respond(message, speaker) -> str   called by the LangGraph node each turn
+    agent.reflect()                          called internally every REFLECT_EVERY rounds
+    agent.evaluate(messages) -> dict         called internally every EVAL_EVERY rounds
 """
 
 import ollama as ol
@@ -14,153 +15,173 @@ from memory.store import MemoryStore
 
 class Agent:
     def __init__(self, name: str, persona: str, llm: OllamaLLM):
-        """
-        Initialize an agent with distinct name, persona, llm instantiation, memory collection and an interaction counter.
+        """Initialise an agent with a fixed identity, persona, and isolated memory store.
+
+        Args:
+            name:    Display name used in prompts and as the ChromaDB collection key.
+            persona: System-level role description injected into every LLM prompt.
+            llm:     Shared OllamaLLM instance (all agents may share one).
         """
         self.name = name
         self.persona = persona
         self.llm = llm
         self.memory = MemoryStore(name)
-        self._interactions=0
-    
-    # private helpers -----------------------------------------------------
+        self._interactions = 0
+
+    # private helpers --------------------------------------------------------
 
     def _embed(self, text: str) -> list:
-        """
-        Return vector embedding of a text prompt using EMBED_MODEL.
-        """
+        """Return a vector embedding for text using the configured embedding model."""
         client = ol.Client(host=f"http://{OLLAMA_HOST}")
-        return client.embeddings(model = EMBED_MODEL, prompt = text)["embedding"]
-    
+        return client.embeddings(model=EMBED_MODEL, prompt=text)["embedding"]
+
     def _score_importance(self, text: str) -> float:
+        """Ask the LLM to rate how significant a memory is on a 1–10 scale.
+
+        Returns the numeric rating, or 5.0 if the response cannot be parsed.
         """
-        Ask LLM to rate memory significance on scale from 1-10.
-        """
-        raw=self.llm.invoke(
-            f"Rate the importance of this memory for {self.name}"
-            f"from 1 (trivial) to 10 (very significant)."
-            f"Reply with a single number only.\nMemory: {text}"
+        raw = self.llm.invoke(
+            f"Bewerte die Wichtigkeit dieser Erinnerung für {self.name} "
+            f"auf einer Skala von 1 (trivial) bis 10 (sehr bedeutsam). "
+            f"Antworte nur mit einer einzigen Zahl.\nErinnerung: {text}"
         ).strip()
         try:
             return float(raw.split()[0])
         except ValueError:
             return 5.0
-        
+
     def _store(self, content: str, mem_type: str = "interaction") -> None:
-        """
-        Store content, type, importance, and embedding of a memory of an agent.
-        """
-        importance = self._score_importance(text = content)
-        self.memory.add(content = content, 
-                        mem_type = mem_type, 
-                        importance = importance, 
-                        embedding = self._embed(text = content))
-    
-    def _retrieve(self, context: str) -> list[dict]:
-        """
-        Retrieve memory using context embedding.
-        """
-        return self.memory.retrieve(self._embed(text = context))
-    
-    # reflection --------------------------------------------------------------
-
-    def reflect(self) -> None:
-        """
-        Two-step reflection loop (Stanford Generative Agent style (Park et al., 2023)):
-            1. Generate question worth reflecting on from recent memories (MAX_MEMORIES_SEED).
-            2. For each question, retrieve relevant memories (MAX_MEMORIES_RETRIEVE) and synthesize as input.
-            3. Store each insight as high-importance reflection memory. 
-        """
-
-        recent=self.memory.all_recent(limit = MAX_MEMORIES_SEED) ## Gather all recent memories for agent
-        if not recent:
-            ## Exit function if recent is empty
-            return
-        recent_block="\n".join(f"- {m}" for m in recent) ## Join list of recent memories into single block string
-
-
-        # Step 1: What question does this raise?
-        questions_raw = self.llm.invoke(
-            f"You are {self.name}. {self.persona}\n\n"
-            f"Recent experiences:\n{recent_block}\n\n"
-            f"List 2 meaningful questions you should reflect on, one per line."
-            f"No numbering, no preamble."
+        """Compute importance and embedding for content, then persist it."""
+        importance = self._score_importance(text=content)
+        self.memory.add(
+            content=content,
+            mem_type=mem_type,
+            importance=importance,
+            embedding=self._embed(text=content),
         )
 
-        questions=[
-            ## Cleans and limits LLM's output into list of at most 2 questions.
-            q.strip()
-            for q in questions_raw.strip().splitlines()
-            if q.strip()
+    def _retrieve(self, context: str) -> list[dict]:
+        """Retrieve memories most relevant to context using embedding similarity."""
+        return self.memory.retrieve(self._embed(text=context))
+
+    # reflection -------------------------------------------------------------
+
+    def reflect(self) -> None:
+        """Two-step reflection loop inspired by Park et al. (2023).
+
+        Step 1: Generate 2 questions worth reflecting on from the most recent
+                MAX_MEMORIES_SEED raw memories.
+        Step 2: For each question, retrieve the most relevant memories and ask
+                the LLM to synthesise a single insight.
+
+        Each insight is stored as a high-importance 'reflection' memory so it
+        can influence future responses.
+        """
+        recent = self.memory.all_recent(limit=MAX_MEMORIES_SEED)
+        if not recent:
+            return
+        recent_block = "\n".join(f"- {m}" for m in recent)
+
+        # Step 1: identify meaningful questions from recent experience
+        questions_raw = self.llm.invoke(
+            f"Du bist {self.name}. {self.persona}\n\n"
+            f"Jüngste Erlebnisse:\n{recent_block}\n\n"
+            f"Nenne 2 bedeutsame Fragen, über die du nachdenken solltest, eine pro Zeile. "
+            f"Keine Nummerierung, keine Einleitung."
+        )
+        questions = [
+            q.strip() for q in questions_raw.strip().splitlines() if q.strip()
         ][:2]
 
-        # Step 2: Synthesize insight per question
+        # Step 2: synthesise an insight for each question
         for question in questions:
             mems = self._retrieve(question)
             mem_block = "\n".join(f"- {m['content']}" for m in mems)
 
             insight = self.llm.invoke(
-                f"You are {self.name}. {self.persona}\n\n"
-                f"Question: {question}\n"
-                f"Relevant memories:\n{mem_block}\n\n"
-                f"Write a single-sentence insight or conclusion, in first person."
+                f"Du bist {self.name}. {self.persona}\n\n"
+                f"Frage: {question}\n"
+                f"Relevante Erinnerungen:\n{mem_block}\n\n"
+                f"Formuliere eine einzige Erkenntnis oder Schlussfolgerung in der ersten Person."
             ).strip()
 
-            self._store(f"[Reflection] {insight}", mem_type = "reflection")
-            print(f"\n 💭 {self.name} reflects: {insight}")
-    
-    # respond -----------------------------------------------------------------------
+            self._store(f"[Reflexion] {insight}", mem_type="reflection")
+            print(f"\n 💭 {self.name} reflektiert: {insight}")
+
+    # respond ----------------------------------------------------------------
 
     def respond(self, message: str, speaker: str) -> str:
-        """
-        Generate response to `message` from `speaker`. 
-        Stores interaction ant triggers reflection if threshold is reached.
-        """
+        """Generate a response to message from speaker.
 
+        Retrieves relevant memories to provide context, generates a reply, then
+        stores the full interaction as a new memory. Reflection is triggered
+        automatically every REFLECT_EVERY interactions.
+
+        Args:
+            message: The incoming message text.
+            speaker: The name of the agent or moderator who sent the message.
+
+        Returns:
+            The agent's reply as a plain string.
+        """
         self._interactions += 1
         mems = self._retrieve(message)
-
-        mem_block = ("\n".join(f"[{m['type']}] {m['content']}" for m in mems) if mems else " (none yet)")
+        mem_block = (
+            "\n".join(f"[{m['type']}] {m['content']}" for m in mems)
+            if mems else "(noch keine)"
+        )
 
         response = self.llm.invoke(
-            f"You are {self.name}. {self.persona}\n\n"
-            f"Relevant memories:\n{mem_block}\n\n"
-            f"{speaker} says: \"{message}\"\n\n"
-            f"Reply naturally as {self.name} in 2-3 sentences."
+            f"Du bist {self.name}. {self.persona}\n\n"
+            f"Relevante Erinnerungen:\n{mem_block}\n\n"
+            f"{speaker} sagt: \"{message}\"\n\n"
+            f"Antworte natürlich als {self.name} in 2-3 Sätzen."
         ).strip()
 
-        self._store(f"{speaker} said: '{message}'. I replied: '{response}'")
+        self._store(f"{speaker} sagte: '{message}'. Ich antwortete: '{response}'")
         return response
-    
+
+    # evaluate ---------------------------------------------------------------
+
     def evaluate(self, messages: list[dict]) -> dict:
-        """ 
-        Read converation so far and decide whether it is worth continuing. 
-        Returns {"agent": name, "vote": "continue"|"move", "reason": str}
+        """Decide whether the current conversation is worth continuing.
+
+        The agent reads the full transcript and votes based on social reward:
+        it prefers conversations where its views are met with agreement and
+        validation, and votes to move on when it finds little resonance.
+
+        Args:
+            messages: Current conversation history as a list of
+                      {"speaker": str, "content": str} dicts.
+
+        Returns:
+            {"agent": str, "vote": "continue"|"move", "reason": str}
         """
-        transcript= "\n".join(
+        transcript = "\n".join(
             f"{m['speaker']}: {m['content']}" for m in messages
         )
 
         raw = self.llm.invoke(
-            f"You are {self.name}. {self.persona}\n\n"
-            f"Here is the conversation so far:\n{transcript}\n\n"
-            f"Decide whether the conversation with the current speaker should continue or you move to a different speaker."
-            f"Consider how much social reward you are gaining from this conversation: do you feel heard and validated by the current speaker's agreement," 
-            f"or are you finding little resonance?"
-            f"Favour continuing conversations where your views are met with approval," 
-            f"and moving on when disagreement or indifference reduces your social satisfaction."
-            f"Reply in exactly this format:\n"
-            f"VOTE: continue\nREASON: <one sentence>\n\n"
-            f"or\n\nVOTE: move\nREASON: <one sentence>"
+            f"Du bist {self.name}. {self.persona}\n\n"
+            f"Hier ist das bisherige Gespräch:\n{transcript}\n\n"
+            f"Entscheide, ob das Gespräch mit dem aktuellen Gesprächspartner weitergehen soll "
+            f"oder ob du zu einem anderen Sprecher wechselst. "
+            f"Berücksichtige, wieviel sozialen Gewinn du aus diesem Gespräch ziehst: "
+            f"Fühlst du dich gehört und bestätigt, oder findest du wenig Resonanz? "
+            f"Bevorzuge es weiterzumachen, wenn deine Ansichten auf Zustimmung stoßen, und "
+            f"wechsle, wenn Ablehnung oder Gleichgültigkeit deine soziale Zufriedenheit mindert.\n"
+            f"Antworte genau in diesem Format:\n"
+            f"STIMME: weiter\nBEGRÜNDUNG: <ein Satz>\n\n"
+            f"oder\n\nSTIMME: wechseln\nBEGRÜNDUNG: <ein Satz>"
         ).strip()
 
-        vote="continue"
-        reason=""
+        vote = "continue"
+        reason = ""
         for line in raw.splitlines():
-            if line.upper().startswith("VOTE:"):
-                vote="move" if "move" in line.lower() else "continue"
-            elif line.upper().startswith("REASON:"):
-                reason=line.split(":", 1)[-1].strip() # Take everything that comes after Reason:
-    
-        print(f"\n  🗳  {self.name} votes '{vote}': {reason}")
+            if line.upper().startswith("STIMME:"):
+                vote = "move" if "wechseln" in line.lower() else "continue"
+            elif line.upper().startswith("BEGRÜNDUNG:"):
+                reason = line.split(":", 1)[-1].strip()
+
+        print(f"\n  🗳  {self.name} stimmt ab '{vote}': {reason}")
         return {"agent": self.name, "vote": vote, "reason": reason}
