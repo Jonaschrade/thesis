@@ -135,7 +135,9 @@ class Agent:
             f"Du bist {self.name}. {self.persona}\n\n"
             f"Relevante Erinnerungen:\n{mem_block}\n\n"
             f"{speaker} sagt: \"{message}\"\n\n"
-            f"Antworte natürlich als {self.name} in 2-3 Sätzen."
+            f"Antworte so, wie {self.name} es wirklich tun würde – "
+            f"in deiner Sprache, mit deinen Werten und aus deiner Lebenserfahrung heraus. "
+            f"Bleib konsequent in der Rolle. Antworte in 2-3 Sätzen."
         ).strip()
 
         self._store(f"{speaker} sagte: '{message}'. Ich antwortete: '{response}'")

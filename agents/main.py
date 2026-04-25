@@ -35,14 +35,9 @@ def main():
     graph = build_graph(agents)
 
     opening = (
-        "Deutschland hat sich jahrzehntelang wissentlich in eine gefährliche Abhängigkeit "
-        "von autoritären Öl- und Gasstaaten manöviert und dafür die eigene Bevölkerung "
-        "mit explodierenden Energiepreisen bezahlen lassen. Russisches Gas, arabisches Öl - "
-        "jede Kilowattstunde war ein politisches Zugeständnis an Regime, die westliche Werte "
-        "offen ablehnen. Diese fossile Abhängigkeit ist kein Unfall, sondern das Ergebnis von "
-        "Lobbyismus und kurzsichtiger Industriepolitik auf Kosten der Bürger. "
-        "Müssen fossile Energieträger als strategisches Sicherheitsrisiko eingestuft und "
-        "ihr Import mittelfristig vollständig verboten werden?"
+        "Deutschland nimmt jedes Jahr Hunderttausende Migranten auf – "
+        "doch Integration scheitert immer wieder an Sprache, Arbeit und Kultur. "
+        "Sollte Deutschland die Grenzen für Nicht-EU-Ausländer dauerhaft schließen?"
     )
 
     print(f"\n Moderator: {opening}\n")
