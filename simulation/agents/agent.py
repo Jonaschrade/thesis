@@ -113,9 +113,16 @@ class Agent:
     def respond(self, message: str, speaker: str) -> str:
         """Generate a response to message from speaker.
 
-        Retrieves relevant memories to provide context, generates a reply, then
-        stores the full interaction as a new memory. Reflection is triggered
-        automatically every REFLECT_EVERY interactions.
+        Retrieves relevant memories to provide context, then prompts the agent
+        to take a clear position on the discussed topic — not merely to stay
+        in character, but to express their own opinion directly.  This ensures
+        the response carries a legible opinion signal so that the social-
+        feedback evaluation (``evaluate()``) can reliably detect concordance
+        or discordance between the two agents, as required by the Banisch &
+        Olbrich (2019) social feedback mechanism.
+
+        The full interaction is stored as a new memory after the response is
+        generated.
 
         Args:
             message: The incoming message text.
@@ -135,9 +142,9 @@ class Agent:
             f"Du bist {self.name}. {self.persona}\n\n"
             f"Relevante Erinnerungen:\n{mem_block}\n\n"
             f"{speaker} sagt: \"{message}\"\n\n"
-            f"Antworte so, wie {self.name} es wirklich tun würde – "
-            f"in deiner Sprache, mit deinen Werten und aus deiner Lebenserfahrung heraus. "
-            f"Bleib konsequent in der Rolle. Antworte in 2-3 Sätzen."
+            f"Beziehe klar Stellung zum diskutierten Thema – so, wie {self.name} es aufgrund "
+            f"seiner Überzeugungen und Lebenserfahrung tun würde. "
+            f"Drücke deine eigene Meinung direkt aus. Antworte in 2-3 Sätzen."
         ).strip()
 
         self._store(f"{speaker} sagte: '{message}'. Ich antwortete: '{response}'")
@@ -146,11 +153,16 @@ class Agent:
     # evaluate ---------------------------------------------------------------
 
     def evaluate(self, messages: list[dict]) -> dict:
-        """Decide whether the current conversation is worth continuing.
+        """Cast a social-feedback vote on whether to continue this conversation.
 
-        The agent reads the full transcript and votes based on social reward:
-        it prefers conversations where its views are met with agreement and
-        validation, and votes to move on when it finds little resonance.
+        Implements the social feedback mechanism from Banisch & Olbrich (2019):
+        the reward signal is determined exclusively by opinion concordance.
+        Agreement with the conversation partner is a positive experience that
+        reinforces conviction and motivates continuation; disagreement is a
+        negative experience that undermines conviction and triggers partner-
+        switching.  General social factors (politeness, conversational style,
+        feeling heard) are deliberately excluded — only the alignment of
+        expressed positions on the topic counts.
 
         Args:
             messages: Current conversation history as a list of
@@ -166,17 +178,18 @@ class Agent:
         raw = self.llm.invoke(
             f"Du bist {self.name}. {self.persona}\n\n"
             f"Hier ist das bisherige Gespräch:\n{transcript}\n\n"
-            f"Entscheide, ob das Gespräch mit dem aktuellen Gesprächspartner weitergehen soll "
-            f"oder ob du zu einem anderen Sprecher wechselst. "
-            f"Berücksichtige, wieviel sozialen Gewinn du aus diesem Gespräch ziehst: "
-            f"Fühlst du dich gehört und bestätigt, oder findest du wenig Resonanz? "
-            f"Bevorzuge es weiterzumachen, wenn deine Ansichten auf Zustimmung stoßen, und "
-            f"wechsle, wenn Ablehnung oder Gleichgültigkeit deine soziale Zufriedenheit mindert.\n"
+            f"Beurteile dieses Gespräch ausschließlich anhand der inhaltlichen Übereinstimmung "
+            f"eurer Meinungen zum Thema: Hat dein Gesprächspartner überwiegend dieselbe Haltung "
+            f"vertreten wie du, oder hat er widersprochen und eine gegensätzliche Position eingenommen?\n\n"
+            f"Übereinstimmung ist eine positive Erfahrung – sie bestärkt deine Überzeugung und "
+            f"lässt dich das Gespräch fortsetzen wollen. "
+            f"Widerspruch ist eine negative Erfahrung – er untergräbt deine Überzeugung und "
+            f"lässt dich nach einem anderen Gesprächspartner suchen.\n\n"
             f"Antworte genau in diesem Format:\n"
             f"STIMME: weiter\nBEGRÜNDUNG: <ein Satz>\n\n"
             f"oder\n\nSTIMME: wechseln\nBEGRÜNDUNG: <ein Satz>"
         ).strip()
-
+        
         vote = "continue"
         reason = ""
         for line in raw.splitlines():
