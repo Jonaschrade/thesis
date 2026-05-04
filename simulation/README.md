@@ -41,7 +41,7 @@ memory/scoring.py      composite score: 0.3·recency + 0.3·importance + 0.4·re
 network/state.py       NetworkState, EdgeData dataclasses
 network/matching.py    compute_pairings(), reconnect_isolated(), ensure_connectivity()
 network/discussion.py  run_discussion() — turn loop + evaluate()
-network/edges.py       update_edge() — adjust strength by concordance score, drop at STRENGTH_FLOOR
+network/edges.py       update_edge() — adjust per-agent valuations by concordance score, drop when either ≤ STRENGTH_FLOOR
 network/logger.py      SimulationLogger — events.jsonl + round_NNNN.json snapshots
 main.py                pairwise entry point
 main_network.py        network entry point
@@ -97,7 +97,7 @@ Pairwise mode uses the same round structure as network mode — each round is on
 
 1. Determine the active topic from the `TOPICS` schedule.
 2. Run one discussion (`DISCUSSION_TURNS` exchanges); both agents evaluate and return a concordance score.
-3. The simulated edge strength between the two agents is adjusted by the combined score × `STRENGTH_DELTA`. The conversation ends early if strength falls to or below `STRENGTH_FLOOR`.
+3. Each agent's internal edge valuation is adjusted by their own score × `STRENGTH_DELTA`. The conversation ends early if either agent's valuation falls to or below `STRENGTH_FLOOR`.
 4. Every `REFLECT_EVERY` rounds all agents reflect on their recent memories.
 5. The conversation ends after `NETWORK_MAX_ROUNDS` rounds at the latest.
 
@@ -107,7 +107,7 @@ Pairwise mode uses the same round structure as network mode — each round is on
 
 ### Overview
 
-`main_network.py` runs a network simulation where agents are nodes in a graph and edges represent active two-way communication channels. Each simulation round, agents are matched into pairs and hold a multi-turn discussion. After each discussion, both agents rate their opinion concordance on a continuous scale (−1.0 to 1.0); this score adjusts edge strength, and edges whose strength falls to or below `STRENGTH_FLOOR` are severed.
+`main_network.py` runs a network simulation where agents are nodes in a graph and edges represent active two-way communication channels. Each simulation round, agents are matched into pairs and hold a multi-turn discussion. After each discussion, each agent's concordance score independently adjusts their internal valuation of the edge; the edge is severed as soon as either agent's valuation falls to or below `STRENGTH_FLOOR`.
 
 Rounds are grouped into topic blocks: the `TOPICS` dict in `config.py` defines an ordered set of discussion questions, and `NETWORK_MAX_ROUNDS` is divided evenly across them so that agents deliberate on each topic for an equal number of rounds before moving to the next.
 
@@ -118,28 +118,30 @@ This design is grounded in the social-feedback model of Banisch & Olbrich (2019)
 ```
 For each round:
   1. Determine topic    active topic = TOPICS block for this round
-  2. Compute pairings   max-weight matching over existing edges (strength-weighted)
-                        + random fallback for unmatched agents
+  2. Compute pairings   max-weight matching over existing edges (strength-weighted);
+                        unmatched agents pause the round (strengths + memories unchanged)
   3. For each pair      DISCUSSION_TURNS × 2 alternating LLM calls via agent.respond()
                         → both agents call agent.evaluate() → score ∈ [−1.0, 1.0]
-  4. Edge update        combined score = (score_a + score_b) / 2
-                        edge.strength += combined × STRENGTH_DELTA
-                        edge.strength ≤ STRENGTH_FLOOR → edge removed
-  5. Reconnect          agents with degree 0 are reconnected (friends-of-friends, then random)
+  4. Edge update        edge.strengths[agent_a] += score_a × STRENGTH_DELTA
+                        edge.strengths[agent_b] += score_b × STRENGTH_DELTA
+                        either value ≤ STRENGTH_FLOOR → edge removed
+  5. Reconnect          agents with degree 0 are reconnected to a uniformly random partner
   6. Reflection         if round % REFLECT_EVERY == 0: all agents reflect
   7. Snapshot           network state written to logs/run_<timestamp>/network_rounds/
 ```
 
 ### Edge lifecycle
 
-Edge strength starts at 1.0 and evolves after each discussion:
+Each edge stores a per-agent internal valuation (`EdgeData.strengths`, keyed by agent name), both starting at 1.0.  After each discussion each agent's value is updated independently:
 
 ```
-combined_score = (score_a + score_b) / 2
-edge.strength += combined_score × STRENGTH_DELTA
-edge.strength  = clamp(edge.strength, 0, STRENGTH_CAP)
-if edge.strength <= STRENGTH_FLOOR: remove edge
+edge.strengths[agent_a] += score_a × STRENGTH_DELTA
+edge.strengths[agent_b] += score_b × STRENGTH_DELTA
+each value = clamp(value, 0, STRENGTH_CAP)
+if either value ≤ STRENGTH_FLOOR: remove edge
 ```
+
+The edge is severed as soon as *either* agent's valuation falls to or below `STRENGTH_FLOOR` — one agent's dissatisfaction is sufficient.  The matching weight is the sum of both values, so mutually valued relationships are preferred in pairing.
 
 `EdgeData.rounds_active` is incremented whenever the edge survives, for post-hoc analysis.
 
@@ -171,7 +173,7 @@ logs/run_<timestamp>/
 | `edge_added` | `round`, `agent_a`, `agent_b` (reconnection) |
 | `reflection` | `round`, `agent` |
 
-**`round_NNNN.json`** snapshot fields: `round`, `idle_agent`, `nodes`, `edges` (with `strength` and `rounds_active`), `metrics` (`density`, `n_components`, `avg_degree`, `n_edges`).
+**`round_NNNN.json`** snapshot fields: `round`, `idle_agent`, `nodes`, `edges` (with `strengths` dict and `rounds_active`), `metrics` (`density`, `n_components`, `avg_degree`, `n_edges`).
 
 ---
 
@@ -182,7 +184,7 @@ logs/run_<timestamp>/
 | Public opinion o_i ∈ {−1,+1} | Agent's expressed position in `respond()` |
 | Social reward r = o_i·o_j ∈ {−1,+1} | `evaluate()` score ∈ [−1.0, 1.0] |
 | Q-value update | Not yet implemented — see extension point below |
-| Network co-evolution | Edge strength adjusted via `update_edge()`; severed at `STRENGTH_FLOOR` |
+| Network co-evolution | Per-agent edge valuations adjusted via `update_edge()`; severed when either ≤ `STRENGTH_FLOOR` |
 | Structural polarisation (n_d) | Not yet logged — see extension point below |
 
 The continuous score extends Banisch's binary ±1 reward to a gradient, allowing partial agreement to be captured. In Banisch's formulation r = o_i · o_j is binary because public opinions are discrete; the gradient here is a deliberate extension.
@@ -236,8 +238,8 @@ On startup, personas are sampled at random from `data/german_personas.json` (5 2
 | `LLM_MODEL` | `qwen2.5:14b` | Ollama model used for all LLM calls |
 | `EMBED_MODEL` | `nomic-embed-text` | Embedding model |
 | `REFLECT_EVERY` | `2` | Reflection frequency (rounds) |
-| `MAX_MEMORIES_SEED` | `15` | Recent memories fed to reflection |
-| `MAX_MEMORIES_RETRIEVE` | `5` | Memories surfaced per agent response |
+| `MAX_MEMORIES_SEED` | `15` | Recent memories fed to prompt reflection question |
+| `MAX_MEMORIES_RETRIEVE` | `5` | Memories surfaced per agent response/reflection |
 | `MEMORY_PERSIST` | `False` | Persist ChromaDB to disk |
 
 ### Pairwise mode only
@@ -255,9 +257,9 @@ On startup, personas are sampled at random from `data/german_personas.json` (5 2
 | `DISCUSSION_TURNS` | `3` | Exchanges per discussion (total turns = value × 2) |
 | `INITIAL_GRAPH_K` | `4` | Watts-Strogatz k (initial avg degree) |
 | `INITIAL_GRAPH_P` | `0.3` | Watts-Strogatz p (rewiring probability) |
-| `STRENGTH_CAP` | `3.0` | Maximum edge strength |
-| `STRENGTH_FLOOR` | `0.0` | Edge removed when strength falls to or below this |
-| `STRENGTH_DELTA` | `0.3` | Strength change per round = combined_score × STRENGTH_DELTA |
+| `STRENGTH_CAP` | `3.0` | Ceiling on each agent's internal edge valuation |
+| `STRENGTH_FLOOR` | `0.0` | Edge removed when either agent's valuation falls to or below this |
+| `STRENGTH_DELTA` | `0.3` | Valuation change per round = agent_score × STRENGTH_DELTA |
 | `TOPICS` | *(dict)* | Ordered label → question mapping; rounds divided evenly across entries |
 
 ---
@@ -266,7 +268,7 @@ On startup, personas are sampled at random from `data/german_personas.json` (5 2
 
 **Response prompt (`respond`)** instructs the agent to *take a clear position* on the discussed topic and express their opinion directly — not merely to respond in character. This is necessary because `evaluate()` judges concordance based on the expressed positions: if agents hedge or respond conversationally without committing to a stance, the opinion signal is unreliable and concordance detection breaks down.
 
-**Evaluation prompt (`evaluate`)** asks the agent to rate the conversation *exclusively on opinion concordance* on a continuous scale from −1.0 (complete disagreement) to +1.0 (complete agreement). General social factors — politeness, conversational style, feeling heard — are explicitly excluded. The score is used directly to adjust edge strength; edges whose strength decays to `STRENGTH_FLOOR` are severed. Output format: `BEWERTUNG: <float>` + `MEINUNGSABGLEICH: <sentence>`.
+**Evaluation prompt (`evaluate`)** asks the agent to rate the conversation *exclusively on opinion concordance* on a continuous scale from −1.0 (complete disagreement) to +1.0 (complete agreement). General social factors — politeness, conversational style, feeling heard — are explicitly excluded. The score is used directly to adjust the calling agent's internal edge valuation; the edge is severed when either agent's valuation reaches `STRENGTH_FLOOR`. Output format: `BEWERTUNG: <float>` + `MEINUNGSABGLEICH: <sentence>`.
 
 Changing either prompt changes the simulation's theoretical alignment. Document any prompt change in this section.
 
@@ -282,9 +284,9 @@ Changing either prompt changes the simulation's theoretical alignment. Document 
 
 **`TOPICS`** — insertion order determines round scheduling. `NETWORK_MAX_ROUNDS` should be divisible by `len(TOPICS)`; if not, the last topic absorbs the remainder. A single entry reproduces single-topic behaviour. The active label appears in each round's console header and in `events.jsonl` as `topic_label`.
 
-**Edge drop rule** — threshold-based: edge is severed when strength ≤ `STRENGTH_FLOOR`. Do not revert to binary veto.
+**Edge drop rule** — threshold-based: edge is severed when *either* agent's internal valuation (`EdgeData.strengths[name]`) falls to or below `STRENGTH_FLOOR`. One dissatisfied agent is sufficient; no bilateral consensus required.
 
-**Matching** — uses `nx.max_weight_matching` with `EdgeData.strength` as weight. Fallback pairs get new introductory edges at `strength=0.5`.
+**Matching** — uses `nx.max_weight_matching` with the sum of both agents' internal valuations as the edge weight. Agents left unmatched pause that round; their edge strengths and memories are unchanged. No introductory edges are created for unmatched agents.
 
 **Logging** — `SimulationLogger` writes to `logs/run_<timestamp>/`. The `extra_metrics` parameter on `snapshot_network()` is the designated slot for Banisch polarisation metrics; do not add separate log files.
 
@@ -294,7 +296,7 @@ Changing either prompt changes the simulation's theoretical alignment. Document 
 
 - `agents/agent.py` — core primitives; prompt wording has theoretical justification
 - `memory/scoring.py` — scoring weights (0.3/0.3/0.4) are tuned
-- `network/matching.py` — blossom algorithm + friends-of-friends reconnection logic
+- `network/matching.py` — blossom algorithm + random reconnection logic
 - The `BEWERTUNG` / `MEINUNGSABGLEICH` output labels in `evaluate()` — parsed by prefix match
 - `STRENGTH_DELTA`, `STRENGTH_FLOOR`, `STRENGTH_CAP` — tuned for edge lifecycle dynamics
 

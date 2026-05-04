@@ -10,8 +10,9 @@ Round structure
 ---------------
 1. Determine the active topic from the ``TOPICS`` schedule.
 2. Run one discussion (``DISCUSSION_TURNS`` exchanges via ``run_discussion()``).
-3. Adjust the simulated edge strength by the combined concordance score.
-   The conversation ends early if strength falls to or below ``STRENGTH_FLOOR``.
+3. Each agent's internal edge valuation is adjusted by their own concordance
+   score × ``STRENGTH_DELTA``.  The conversation ends early if either agent's
+   valuation falls to or below ``STRENGTH_FLOOR``.
 4. Every ``REFLECT_EVERY`` rounds all agents reflect on their recent memories.
 
 Configuration
@@ -67,28 +68,29 @@ def main() -> None:
 
     logger.log_personas({a.name: a for a in agents})
 
-    edge_strength = 1.0   # simulated relationship strength between the two agents
+    # Per-agent internal valuations of the relationship (mirrors network/edges.py)
+    strength = {agents[0].name: 1.0, agents[1].name: 1.0}
 
     for round_n in range(1, NETWORK_MAX_ROUNDS + 1):
         topic_label, topic_text = _topic_for_round(round_n)
+        a, b = agents[0].name, agents[1].name
 
         print(f"\n{'━' * 50}")
-        print(f"Round {round_n} / {NETWORK_MAX_ROUNDS}  │  topic: {topic_label}  │  strength: {edge_strength:.2f}")
+        print(f"Round {round_n} / {NETWORK_MAX_ROUNDS}  │  topic: {topic_label}  │  "
+              f"strengths: {a} {strength[a]:.2f} / {b} {strength[b]:.2f}")
         print(f"{'━' * 50}")
 
         # ── Discussion ────────────────────────────────────────────────────
         result = run_discussion(agents[0], agents[1], topic_text, topic_label=topic_label)
 
-        # ── Edge strength update (same formula as network/edges.py) ───────
-        combined = (result["score_a"] + result["score_b"]) / 2
-        edge_strength += combined * STRENGTH_DELTA
-        edge_strength = max(0.0, min(STRENGTH_CAP, edge_strength))
+        # ── Per-agent strength update (mirrors network/edges.py) ──────────
+        strength[a] = max(0.0, min(STRENGTH_CAP, strength[a] + result["score_a"] * STRENGTH_DELTA))
+        strength[b] = max(0.0, min(STRENGTH_CAP, strength[b] + result["score_b"] * STRENGTH_DELTA))
 
-        print(f"\n  {agents[0].name} {result['score_a']:+.2f}  │  "
-              f"{agents[1].name} {result['score_b']:+.2f}  │  "
-              f"combined {combined:+.2f}  │  strength → {edge_strength:.2f}")
+        print(f"\n  {a} {result['score_a']:+.2f} → {strength[a]:.2f}  │  "
+              f"{b} {result['score_b']:+.2f} → {strength[b]:.2f}")
 
-        if edge_strength <= STRENGTH_FLOOR:
+        if strength[a] <= STRENGTH_FLOOR or strength[b] <= STRENGTH_FLOOR:
             print("\n  ✋ Conversation ended: relationship strength reached zero.")
             break
 

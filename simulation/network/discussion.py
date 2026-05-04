@@ -9,7 +9,8 @@ persistent memory for context.
 
 The caller receives a plain dict with the transcript, both agents' concordance
 scores, and both agents' stated reasons.  The edge lifecycle module
-(``network/edges.py``) consumes the scores to adjust edge strength.
+(``network/edges.py``) consumes the scores to adjust each agent's internal
+edge valuation independently.
 
 Extension point
 ---------------

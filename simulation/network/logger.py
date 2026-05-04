@@ -205,9 +205,9 @@ class SimulationLogger:
         """
         edges = [
             {
-                "a":            u,
-                "b":            v,
-                "strength":     state.graph[u][v]["data"].strength,
+                "a":             u,
+                "b":             v,
+                "strengths":     state.graph[u][v]["data"].strengths,
                 "rounds_active": state.graph[u][v]["data"].rounds_active,
             }
             for u, v in state.graph.edges()

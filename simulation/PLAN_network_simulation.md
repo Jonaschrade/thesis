@@ -22,7 +22,7 @@ Initialization:
   - Log round-0 network snapshot
 
 For each simulation round:
-  1. Compute pairings: max-weight matching over existing edges + random fallback for unmatched agents
+  1. Compute pairings: max-weight matching over existing edges; unmatched agents pause the round (no introductory edges added)
   2. For each pair (agent_a, agent_b):
        a. Run DISCUSSION_TURNS turn-taking loop via agent.respond()
        b. Both agents call agent.evaluate(transcript) → "continue" / "move"
@@ -71,7 +71,7 @@ import networkx as nx
 
 @dataclass
 class EdgeData:
-    strength: float = 1.0       # grows on mutual "continue", drops reset it
+    strengths: dict = field(default_factory=dict)  # {agent_name: float} — per-agent valuation
     rounds_active: int = 0      # how many discussions this pair has had
 
 @dataclass
@@ -91,10 +91,10 @@ class NetworkState:
 **`network/matching.py`** — pairing logic
 - `compute_pairings(state) -> list[tuple[str, str]]`
   1. If `len(agents)` is odd: rotate sit-out agent via `state.round % len(agents)`
-  2. `nx.max_weight_matching(subgraph, maxcardinality=True)` with edge weight = `EdgeData.strength`
-  3. Pair leftover unmatched agents randomly → new introductory edges at `strength=0.5`
-  4. Return full list of pairs for this round
-- `reconnect_isolated(state, agent_name)` — tries friends-of-friends first, then random non-neighbour; adds edge at `strength=0.5`
+  2. `nx.max_weight_matching(subgraph, maxcardinality=True)` with edge weight = sum of `EdgeData.strengths` (both agents' valuations)
+  3. Unmatched agents pause the round — no introductory edges added, strengths and memories unchanged
+  4. Return matched pairs only
+- `reconnect_isolated(state, agent_name)` — picks a uniformly random partner; adds edge at `strength=0.5`
 
 ---
 
@@ -136,7 +136,8 @@ def update_edge(state, agent_a: str, agent_b: str, vote_a: str, vote_b: str) -> 
         state.graph.remove_edge(agent_a, agent_b)
         return False
     edge = state.graph[agent_a][agent_b]["data"]
-    edge.strength = min(STRENGTH_CAP, edge.strength + STRENGTH_BONUS)
+    edge.strengths[agent_a] = min(STRENGTH_CAP, edge.strengths[agent_a] + STRENGTH_BONUS)
+    edge.strengths[agent_b] = min(STRENGTH_CAP, edge.strengths[agent_b] + STRENGTH_BONUS)
     edge.rounds_active += 1
     return True
 
@@ -226,7 +227,7 @@ def main():
 
 ## Edge-Drop Rule
 
-**Either agent votes "move" → edge dropped.** (Asymmetric veto — realistic, and produces richer turnover for analysis.) Edge strength grows only when both vote "continue" (+0.2, capped at 3.0). Strength influences pairing priority via the matching weight but is not itself a drop threshold.
+**Either agent's internal valuation falls to or below `STRENGTH_FLOOR` → edge dropped.** Each agent independently updates their own valuation by their concordance score × `STRENGTH_DELTA`. One dissatisfied agent is sufficient to sever the channel (asymmetric veto). The matching weight is the sum of both valuations.
 
 ---
 

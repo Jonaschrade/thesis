@@ -26,18 +26,20 @@ class EdgeData:
 
     Attributes
     ----------
-    strength:
-        A floating-point weight adjusted after each discussion by the
-        combined concordance score × ``STRENGTH_DELTA``.  Positive scores
-        (agreement) increase it; negative scores (disagreement) decrease it.
-        Capped at ``STRENGTH_CAP``.  Used as the matching weight during
-        pairing so that well-established relationships are preferred.
+    strengths:
+        Per-agent internal valuation of the relationship, keyed by agent
+        name.  Each agent's value is updated independently after each
+        discussion by their own concordance score × ``STRENGTH_DELTA``.
+        The edge is severed as soon as *either* agent's value falls to or
+        below ``STRENGTH_FLOOR``.  The matching weight is the sum of both
+        values so that well-established (mutually valued) relationships are
+        preferred in pairing.
     rounds_active:
         Counter incremented after every discussion in which the edge
         survives.  Useful for post-hoc analysis of relationship duration.
     """
 
-    strength: float = 1.0
+    strengths: dict = field(default_factory=dict)  # {agent_name: float}
     rounds_active: int = 0
 
 

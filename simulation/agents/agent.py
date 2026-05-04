@@ -131,7 +131,6 @@ class Agent:
         Returns:
             The agent's reply as a plain string.
         """
-        self._interactions += 1
         mems = self._retrieve(message)
         mem_block = (
             "\n".join(f"[{m['type']}] {m['content']}" for m in mems)
@@ -162,9 +161,9 @@ class Agent:
         factors — politeness, conversational style, feeling heard — are
         deliberately excluded.
 
-        The returned score is used by ``network/edges.py`` to adjust edge
-        strength.  Edges whose strength falls at or below ``STRENGTH_FLOOR``
-        are severed.
+        The returned score is used by ``network/edges.py`` to adjust the
+        calling agent's internal edge valuation.  The edge is severed as soon
+        as either agent's valuation falls to or below ``STRENGTH_FLOOR``.
 
         Args:
             messages: Current conversation history as a list of

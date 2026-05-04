@@ -11,12 +11,13 @@ between each active pair — the same unit used in pairwise mode (``main.py``).
 Round structure
 ---------------
 1. Determine the active topic from the ``TOPICS`` schedule.
-2. Compute pairings via max-weight matching over existing edges (with random
-   fallback for unmatched agents).
+2. Compute pairings via max-weight matching over existing edges; unmatched
+   agents pause the round.
 3. Each pair holds one discussion (``DISCUSSION_TURNS`` exchanges); both agents
    then rate opinion concordance on [−1.0, 1.0] via ``evaluate()``.
-4. Edge strength is adjusted by the combined score × ``STRENGTH_DELTA``.
-   Edges whose strength falls to or below ``STRENGTH_FLOOR`` are removed.
+4. Each agent's internal edge valuation is adjusted by their own score ×
+   ``STRENGTH_DELTA``.  The edge is removed when either agent's valuation
+   falls to or below ``STRENGTH_FLOOR``.
 5. Isolated agents are reconnected before the next round.
 6. Every ``REFLECT_EVERY`` simulation rounds all agents reflect on their memories.
 7. The network state is snapshotted to ``logs/run_<timestamp>/``.
@@ -95,7 +96,7 @@ def _build_initial_graph(agent_names: list[str]) -> nx.Graph:
     G = nx.watts_strogatz_graph(n, k=INITIAL_GRAPH_K, p=INITIAL_GRAPH_P)
     G = nx.relabel_nodes(G, {i: agent_names[i] for i in range(n)})
     for u, v in G.edges():
-        G[u][v]["data"] = EdgeData()
+        G[u][v]["data"] = EdgeData(strengths={u: 1.0, v: 1.0})
     return G
 
 
@@ -170,10 +171,16 @@ def main() -> None:
             logger.log_edge_event(round_n, event_type, agent_a_name, agent_b_name)
 
             status = "✔ maintained" if survived else "✘ dropped"
-            combined = (result["score_a"] + result["score_b"]) / 2
+            if survived:
+                edge = state.graph[agent_a_name][agent_b_name]["data"]
+                str_a = edge.strengths[agent_a_name]
+                str_b = edge.strengths[agent_b_name]
+                strength_info = f"  |  strengths {str_a:.2f} / {str_b:.2f}"
+            else:
+                strength_info = ""
             print(f"    {agent_a_name} {result['score_a']:+.2f}  |  "
-                  f"{agent_b_name} {result['score_b']:+.2f}  |  "
-                  f"combined {combined:+.2f}  |  edge {status}")
+                  f"{agent_b_name} {result['score_b']:+.2f}"
+                  f"{strength_info}  |  edge {status}")
 
         # ── Reconnect isolated agents ────────────────────────────────────
         ensure_connectivity(state)
