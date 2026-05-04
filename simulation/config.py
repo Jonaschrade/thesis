@@ -37,9 +37,9 @@ WEIGHT_RELEVANCE  = 0.4
 NUM_AGENTS = 2   # agents to sample and instantiate
 
 # ── Network simulation ────────────────────────────────────────────────────────
-NUM_AGENTS_NETWORK = 20     # total agents in the network graph
-NETWORK_MAX_ROUNDS = 30     # total simulation rounds (used by both modes)
-DISCUSSION_TURNS   = 3      # exchanges per discussion (total turns = DISCUSSION_TURNS × 2)
+NUM_AGENTS_NETWORK = 4     # total agents in the network graph
+NETWORK_MAX_ROUNDS = 3     # total simulation rounds (used by both modes)
+DISCUSSION_TURNS   = 2      # exchanges per discussion (total turns = DISCUSSION_TURNS × 2)
 INITIAL_GRAPH_K    = 4      # Watts-Strogatz k parameter (initial avg degree ≈ k)
 INITIAL_GRAPH_P    = 0.3    # Watts-Strogatz p parameter (random rewiring probability)
 STRENGTH_CAP       = 3.0    # ceiling on each agent's internal edge valuation
