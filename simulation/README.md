@@ -2,6 +2,8 @@
 
 A thesis research project implementing a multi-agent deliberation system with persistent memory, reflection, and social evaluation — powered by local LLMs via [Ollama](https://ollama.ai).
 
+The research question is how social reinforcement produces polarisation structures in a network — grounded in the social-feedback model of **Banisch & Olbrich (2019)**.
+
 The project provides two simulation modes:
 
 | Mode | Entry point | Description |
@@ -9,48 +11,71 @@ The project provides two simulation modes:
 | **Pairwise** | `main.py` | Two agents converse in a sequential round-based loop |
 | **Network** | `main_network.py` | N agents form a graph; N/2 pairs discuss each round; edges evolve |
 
-Both modes share the same agent primitives (`respond`, `reflect`, `evaluate`) and memory system. The network module is the canonical simulation driver; the pairwise mode is a lightweight special case of N=2.
+Both modes share the same agent primitives (`respond`, `reflect`, `evaluate`), memory system, and round structure. The network module is the canonical simulation driver; the pairwise mode is a lightweight special case with two agents and no graph.
+
+No LangGraph. No OpenAI. Local Ollama only (`qwen2.5:14b` + `nomic-embed-text`).
+
+---
+
+## Terminology
+
+| Term | Definition |
+|---|---|
+| **Turn** | One `respond()` call — one agent speaks once |
+| **Exchange** | One full back-and-forth — both agents speak once (2 turns) |
+| **Discussion** | `DISCUSSION_TURNS` exchanges (`DISCUSSION_TURNS × 2` turns total) |
+| **Simulation round** | One complete discussion between a pair — identical meaning in both modes |
+
+These terms are used consistently throughout the codebase. "Round" always means simulation round; "exchange" always means one back-and-forth; "turn" always means a single agent utterance.
 
 ---
 
 ## Architecture
 
 ```
-agents/           Agent class (respond, reflect, evaluate) and persona sampler
-memory/           ChromaDB-backed memory storage and composite scoring algorithm
-network/          Network simulation module (see below)
-data/             Raw survey data (ZA9089_JSON.xlsx) and persona pool (german_personas.json)
-notebooks/        Exploratory notebooks (data export, persona sampling, distribution plots)
-logs/             Simulation output — created at runtime by main_network.py
-img/              Generated plots
-config.py         Central configuration (models, weights, thresholds)
-main.py           Entry point — pairwise mode
-main_network.py   Entry point — network mode
-```
-
-### `network/` module
-
-```
-network/
-├── state.py       NetworkState and EdgeData dataclasses
-├── matching.py    Agent pairing (max-weight matching) and reconnection logic
-├── discussion.py  Pairwise discussion runner (turn loop + evaluate())
-├── edges.py       Edge lifecycle: strengthen on mutual "continue", drop on "move"
-└── logger.py      Structured JSONL event log and per-round network snapshots
+config.py              single source of truth for all constants
+agents/agent.py        Agent class — respond(), reflect(), evaluate()
+agents/personas.py     samples survey records, expands to name+persona via LLM
+memory/store.py        per-agent ChromaDB collection
+memory/scoring.py      composite score: 0.3·recency + 0.3·importance + 0.4·relevance
+network/state.py       NetworkState, EdgeData dataclasses
+network/matching.py    compute_pairings(), reconnect_isolated(), ensure_connectivity()
+network/discussion.py  run_discussion() — turn loop + evaluate()
+network/edges.py       update_edge() — adjust strength by concordance score, drop at STRENGTH_FLOOR
+network/logger.py      SimulationLogger — events.jsonl + round_NNNN.json snapshots
+main.py                pairwise entry point
+main_network.py        network entry point
+data/                  ZA9089_JSON.xlsx (raw survey), german_personas.json (persona pool)
+logs/                  simulation output — created at runtime by main_network.py
 ```
 
 ---
 
-## Pairwise mode
+## Agent primitives
 
-### Conversation flow
+All three methods are called directly — no graph framework wraps them.
 
-1. Agents take turns responding in a fixed cyclic order; each round both agents speak once.
-2. Every `REFLECT_EVERY` rounds all agents simultaneously reflect, synthesising insights from recent memories.
-3. Every `EVAL_EVERY` rounds all agents vote `weiter` or `wechseln`; any `wechseln` vote ends the conversation.
-4. The conversation ends after `DEFAULT_MAX_ROUNDS` rounds at the latest.
+### `respond(message, speaker) -> str`
+- Retrieves up to `MAX_MEMORIES_RETRIEVE` relevant memories (embedding similarity + composite score)
+- Prompt instructs the agent to **take a clear position** on the topic, not merely stay in character
+- Stores the full interaction as a new memory afterward
+- **Do not soften the position-taking instruction** — it is required for `evaluate()` to produce a reliable concordance signal
 
-### Memory system
+### `reflect()`
+- Two-step: generate 2 reflection questions from the most recent `MAX_MEMORIES_SEED` memories → synthesise 1 insight per question
+- Stores insights as high-importance `"reflection"` memories, influencing future `respond()` calls
+- Triggered every `REFLECT_EVERY` rounds in both modes
+
+### `evaluate(messages) -> {"agent", "score", "reason"}`
+- Rates the conversation **exclusively on opinion concordance** (Banisch reward signal)
+- Returns a continuous score in [−1.0, 1.0]: positive = agreement, negative = disagreement
+- Output format: `BEWERTUNG: <float>` + `MEINUNGSABGLEICH: <concordance sentence>`
+- Parser keys on `"BEWERTUNG:"` and `"MEINUNGSABGLEICH:"` prefixes
+- **Do not add social/emotional criteria** (politeness, feeling heard, etc.) — excluded by design
+
+---
+
+## Memory system
 
 Each agent has a per-agent [ChromaDB](https://www.trychroma.com) collection. Memories are ranked by a composite score:
 
@@ -59,8 +84,22 @@ score = 0.3 × recency + 0.3 × importance + 0.4 × relevance
 ```
 
 - **Recency** — exponential decay over time
-- **Importance** — LLM-rated significance (1–10), normalised
+- **Importance** — LLM-rated significance (1–10), normalised to [0, 1]
 - **Relevance** — cosine similarity to the current query embedding
+
+---
+
+## Pairwise mode
+
+### Round structure
+
+Pairwise mode uses the same round structure as network mode — each round is one complete discussion of `DISCUSSION_TURNS` exchanges via `run_discussion()`.
+
+1. Determine the active topic from the `TOPICS` schedule.
+2. Run one discussion (`DISCUSSION_TURNS` exchanges); both agents evaluate and return a concordance score.
+3. The simulated edge strength between the two agents is adjusted by the combined score × `STRENGTH_DELTA`. The conversation ends early if strength falls to or below `STRENGTH_FLOOR`.
+4. Every `REFLECT_EVERY` rounds all agents reflect on their recent memories.
+5. The conversation ends after `NETWORK_MAX_ROUNDS` rounds at the latest.
 
 ---
 
@@ -68,24 +107,41 @@ score = 0.3 × recency + 0.3 × importance + 0.4 × relevance
 
 ### Overview
 
-`main_network.py` runs a network simulation where agents are nodes in a graph and edges represent active two-way communication channels. Each simulation round, agents are matched into pairs and hold a multi-turn discussion. After each discussion, both agents cast a social-reward vote using the existing `evaluate()` prompt. Edges are maintained or severed based on those votes.
+`main_network.py` runs a network simulation where agents are nodes in a graph and edges represent active two-way communication channels. Each simulation round, agents are matched into pairs and hold a multi-turn discussion. After each discussion, both agents rate their opinion concordance on a continuous scale (−1.0 to 1.0); this score adjusts edge strength, and edges whose strength falls to or below `STRENGTH_FLOOR` are severed.
 
-This design is grounded in the social-feedback model of Banisch & Olbrich (2019): agents who consistently experience agreement with a partner strengthen that relationship, while agents who find little resonance sever it and seek new partners, producing emergent network dynamics (clustering, echo chambers, fragmentation).
+Rounds are grouped into topic blocks: the `TOPICS` dict in `config.py` defines an ordered set of discussion questions, and `NETWORK_MAX_ROUNDS` is divided evenly across them so that agents deliberate on each topic for an equal number of rounds before moving to the next.
+
+This design is grounded in the social-feedback model of Banisch & Olbrich (2019): agents who consistently agree with a partner strengthen that relationship, while persistent disagreement erodes it until the edge severs naturally and the agent seeks new partners — producing emergent network dynamics (clustering, echo chambers, fragmentation).
 
 ### Network round structure
 
 ```
 For each round:
-  1. Compute pairings   max-weight matching over existing edges (strength-weighted)
+  1. Determine topic    active topic = TOPICS block for this round
+  2. Compute pairings   max-weight matching over existing edges (strength-weighted)
                         + random fallback for unmatched agents
-  2. For each pair      DISCUSSION_TURNS alternating LLM calls via agent.respond()
-                        → both agents call agent.evaluate() → "weiter" / "wechseln"
-  3. Edge update        both "weiter" → strengthen (+0.2, cap 3.0)
-                        either "wechseln" → edge removed
-  4. Reconnect          agents with degree 0 are reconnected (friends-of-friends, then random)
-  5. Reflection         if round % REFLECT_EVERY == 0: all agents reflect
-  6. Snapshot           network state written to logs/run_<timestamp>/network_rounds/
+  3. For each pair      DISCUSSION_TURNS × 2 alternating LLM calls via agent.respond()
+                        → both agents call agent.evaluate() → score ∈ [−1.0, 1.0]
+  4. Edge update        combined score = (score_a + score_b) / 2
+                        edge.strength += combined × STRENGTH_DELTA
+                        edge.strength ≤ STRENGTH_FLOOR → edge removed
+  5. Reconnect          agents with degree 0 are reconnected (friends-of-friends, then random)
+  6. Reflection         if round % REFLECT_EVERY == 0: all agents reflect
+  7. Snapshot           network state written to logs/run_<timestamp>/network_rounds/
 ```
+
+### Edge lifecycle
+
+Edge strength starts at 1.0 and evolves after each discussion:
+
+```
+combined_score = (score_a + score_b) / 2
+edge.strength += combined_score × STRENGTH_DELTA
+edge.strength  = clamp(edge.strength, 0, STRENGTH_CAP)
+if edge.strength <= STRENGTH_FLOOR: remove edge
+```
+
+`EdgeData.rounds_active` is incremented whenever the edge survives, for post-hoc analysis.
 
 ### Initial topology
 
@@ -97,6 +153,7 @@ Each run produces a timestamped directory under `logs/`:
 
 ```
 logs/run_<timestamp>/
+├── personas.json                 # agent names and persona descriptions (written at startup)
 ├── events.jsonl                  # one JSON record per event (discussion, edge, reflection)
 └── network_rounds/
     ├── round_0000.json           # baseline snapshot before round 1
@@ -108,13 +165,27 @@ logs/run_<timestamp>/
 
 | `type` | Fields |
 |---|---|
-| `discussion` | `round`, `agent_a`, `agent_b`, `turns`, `vote_a`, `reason_a`, `vote_b`, `reason_b` |
+| `discussion` | `round`, `agent_a`, `agent_b`, `topic_label`, `turns`, `score_a`, `reason_a`, `score_b`, `reason_b` |
 | `edge_maintained` | `round`, `agent_a`, `agent_b` |
 | `edge_dropped` | `round`, `agent_a`, `agent_b` |
 | `edge_added` | `round`, `agent_a`, `agent_b` (reconnection) |
 | `reflection` | `round`, `agent` |
 
 **`round_NNNN.json`** snapshot fields: `round`, `idle_agent`, `nodes`, `edges` (with `strength` and `rounds_active`), `metrics` (`density`, `n_components`, `avg_degree`, `n_edges`).
+
+---
+
+## Theoretical grounding (Banisch & Olbrich 2019)
+
+| Banisch concept | This simulation |
+|---|---|
+| Public opinion o_i ∈ {−1,+1} | Agent's expressed position in `respond()` |
+| Social reward r = o_i·o_j ∈ {−1,+1} | `evaluate()` score ∈ [−1.0, 1.0] |
+| Q-value update | Not yet implemented — see extension point below |
+| Network co-evolution | Edge strength adjusted via `update_edge()`; severed at `STRENGTH_FLOOR` |
+| Structural polarisation (n_d) | Not yet logged — see extension point below |
+
+The continuous score extends Banisch's binary ±1 reward to a gradient, allowing partial agreement to be captured. In Banisch's formulation r = o_i · o_j is binary because public opinions are discrete; the gradient here is a deliberate extension.
 
 ---
 
@@ -148,8 +219,8 @@ For a quick smoke test, set in `config.py`:
 
 ```python
 NUM_AGENTS_NETWORK = 4
-NETWORK_MAX_ROUNDS = 3
-DISCUSSION_TURNS   = 2
+NETWORK_MAX_ROUNDS = 3   # must be divisible by len(TOPICS) for equal blocks
+DISCUSSION_TURNS   = 2   # 2 exchanges per discussion = 4 turns total
 ```
 
 On startup, personas are sampled at random from `data/german_personas.json` (5 246 German citizen survey records). The LLM derives a realistic German first name and a 2–3 sentence German persona description (`Du bist …`) from each record's demographic and attitudinal attributes. All agent prompts, responses, reflections, and evaluations run in German.
@@ -174,42 +245,70 @@ On startup, personas are sampled at random from `data/german_personas.json` (5 2
 | Setting | Default | Description |
 |---|---|---|
 | `NUM_AGENTS` | `2` | Agents per run |
-| `DEFAULT_MAX_ROUNDS` | `12` | Hard conversation limit |
-| `EVAL_EVERY` | `4` | Evaluation frequency (rounds) |
 
 ### Network mode only
 
 | Setting | Default | Description |
 |---|---|---|
 | `NUM_AGENTS_NETWORK` | `20` | Agents in the network |
-| `NETWORK_MAX_ROUNDS` | `30` | Total simulation rounds |
-| `DISCUSSION_TURNS` | `6` | LLM turns per pairwise discussion |
+| `NETWORK_MAX_ROUNDS` | `30` | Total simulation rounds (used by both modes) |
+| `DISCUSSION_TURNS` | `3` | Exchanges per discussion (total turns = value × 2) |
 | `INITIAL_GRAPH_K` | `4` | Watts-Strogatz k (initial avg degree) |
 | `INITIAL_GRAPH_P` | `0.3` | Watts-Strogatz p (rewiring probability) |
 | `STRENGTH_CAP` | `3.0` | Maximum edge strength |
+| `STRENGTH_FLOOR` | `0.0` | Edge removed when strength falls to or below this |
+| `STRENGTH_DELTA` | `0.3` | Strength change per round = combined_score × STRENGTH_DELTA |
+| `TOPICS` | *(dict)* | Ordered label → question mapping; rounds divided evenly across entries |
 
 ---
 
 ## Prompt design and Banisch & Olbrich alignment
 
-Both prompts in `Agent` are designed to support the social-feedback mechanism of Banisch & Olbrich (2019).
+**Response prompt (`respond`)** instructs the agent to *take a clear position* on the discussed topic and express their opinion directly — not merely to respond in character. This is necessary because `evaluate()` judges concordance based on the expressed positions: if agents hedge or respond conversationally without committing to a stance, the opinion signal is unreliable and concordance detection breaks down.
 
-**Response prompt (`respond`)** instructs the agent to *take a clear position* on the discussed topic and express their opinion directly — not merely to respond in character.  This is necessary because `evaluate()` judges concordance based on the expressed positions: if agents hedge or respond conversationally without committing to a stance, the opinion signal is unreliable and the concordance detection breaks down.
+**Evaluation prompt (`evaluate`)** asks the agent to rate the conversation *exclusively on opinion concordance* on a continuous scale from −1.0 (complete disagreement) to +1.0 (complete agreement). General social factors — politeness, conversational style, feeling heard — are explicitly excluded. The score is used directly to adjust edge strength; edges whose strength decays to `STRENGTH_FLOOR` are severed. Output format: `BEWERTUNG: <float>` + `MEINUNGSABGLEICH: <sentence>`.
 
-**Evaluation prompt (`evaluate`)** asks the agent to judge the conversation *exclusively on opinion concordance*: did the partner share the same position or contradict it?  Agreement is framed as a positive experience that reinforces conviction (→ continue); disagreement as a negative experience that undermines conviction (→ switch partner).  General social factors — politeness, conversational style, feeling heard — are explicitly excluded.  This mirrors Banisch's reward signal exactly: r = +1 for agreement, r = −1 for disagreement, with no role for indifference.
+Changing either prompt changes the simulation's theoretical alignment. Document any prompt change in this section.
+
+---
+
+## Conventions
+
+**Language** — all LLM prompts and agent outputs are in German. Code, docstrings, comments, and logs are in English.
+
+**Config** — all tunables live in `config.py`. No magic numbers in source files.
+
+**`DISCUSSION_TURNS`** — counts exchanges per discussion, not individual turns. Total turns = `DISCUSSION_TURNS × 2`. Do not reinterpret as turns.
+
+**`TOPICS`** — insertion order determines round scheduling. `NETWORK_MAX_ROUNDS` should be divisible by `len(TOPICS)`; if not, the last topic absorbs the remainder. A single entry reproduces single-topic behaviour. The active label appears in each round's console header and in `events.jsonl` as `topic_label`.
+
+**Edge drop rule** — threshold-based: edge is severed when strength ≤ `STRENGTH_FLOOR`. Do not revert to binary veto.
+
+**Matching** — uses `nx.max_weight_matching` with `EdgeData.strength` as weight. Fallback pairs get new introductory edges at `strength=0.5`.
+
+**Logging** — `SimulationLogger` writes to `logs/run_<timestamp>/`. The `extra_metrics` parameter on `snapshot_network()` is the designated slot for Banisch polarisation metrics; do not add separate log files.
+
+**No opinion state yet** — do not add Q-values, opinion-stance extraction, or polarisation metrics until the extension is explicitly requested.
+
+### What not to touch without good reason
+
+- `agents/agent.py` — core primitives; prompt wording has theoretical justification
+- `memory/scoring.py` — scoring weights (0.3/0.3/0.4) are tuned
+- `network/matching.py` — blossom algorithm + friends-of-friends reconnection logic
+- The `BEWERTUNG` / `MEINUNGSABGLEICH` output labels in `evaluate()` — parsed by prefix match
+- `STRENGTH_DELTA`, `STRENGTH_FLOOR`, `STRENGTH_CAP` — tuned for edge lifecycle dynamics
 
 ---
 
 ## Extension: Banisch & Olbrich opinion tracking
 
-The network module is structured so that adding Banisch & Olbrich (2019) opinion state requires minimal changes. The required steps are:
+The network module is structured so that adding Banisch & Olbrich (2019) opinion state requires minimal changes:
 
 1. Create `network/opinion.py` with `AgentOpinionState`, `init_opinion_states`, `update_opinion_states`, and `compute_metrics`.
-2. In `main_network.py`, uncomment the three EXTENSION POINT blocks (≈ 5 lines total).
-3. In `network/discussion.py`, uncomment the `reward_a` / `reward_b` fields (2 lines).
-4. In `network/state.py`, uncomment the `opinion_states` field (1 line).
+2. In `main_network.py`, uncomment the three `# EXTENSION POINT` blocks (≈ 5 lines total).
+3. In `network/state.py`, uncomment the `opinion_states` field (1 line).
 
-No other file needs modification. See `PLAN_network_simulation.md` for the full extension design.
+`score_a` and `score_b` from `run_discussion()` are already the continuous reward signal in [−1.0, 1.0] and can be passed directly to `update_opinion_states` — no changes to `network/discussion.py` are needed.
 
 ---
 

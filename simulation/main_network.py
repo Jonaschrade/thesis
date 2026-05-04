@@ -2,20 +2,24 @@
 Network simulation entry point.
 
 Runs the full network simulation: a Watts-Strogatz small-world graph of
-agents who hold pairwise discussions each round and vote — using the existing
-social-feedback ``evaluate()`` prompt — on whether to maintain or sever their
-communication edge.
+agents who hold pairwise discussions each simulation round and adjust their
+communication edges based on continuous social-feedback scores.
+
+A simulation round is one complete discussion (``DISCUSSION_TURNS`` exchanges)
+between each active pair — the same unit used in pairwise mode (``main.py``).
 
 Round structure
 ---------------
-1. Compute pairings via max-weight matching over existing edges (with random
+1. Determine the active topic from the ``TOPICS`` schedule.
+2. Compute pairings via max-weight matching over existing edges (with random
    fallback for unmatched agents).
-2. Each pair runs ``DISCUSSION_TURNS`` LLM turns, then both agents cast a
-   social-reward vote ("weiter" / "wechseln").
-3. Edges are strengthened (mutual "continue") or removed (any "move").
-4. Isolated agents are reconnected before the next round.
-5. Every ``REFLECT_EVERY`` rounds all agents reflect on their recent memories.
-6. The network state is snapshotted to ``logs/run_<timestamp>/``.
+3. Each pair holds one discussion (``DISCUSSION_TURNS`` exchanges); both agents
+   then rate opinion concordance on [−1.0, 1.0] via ``evaluate()``.
+4. Edge strength is adjusted by the combined score × ``STRENGTH_DELTA``.
+   Edges whose strength falls to or below ``STRENGTH_FLOOR`` are removed.
+5. Isolated agents are reconnected before the next round.
+6. Every ``REFLECT_EVERY`` simulation rounds all agents reflect on their memories.
+7. The network state is snapshotted to ``logs/run_<timestamp>/``.
 
 Configuration
 -------------
@@ -24,8 +28,6 @@ All tunable parameters live in ``config.py``.  For a quick smoke test, set::
     NUM_AGENTS_NETWORK = 4
     NETWORK_MAX_ROUNDS = 3
     DISCUSSION_TURNS   = 2
-
-To change the discussion topic, edit the ``TOPIC`` constant below.
 
 Extension point
 ---------------
@@ -47,6 +49,7 @@ from config import (
     NUM_AGENTS_NETWORK,
     OLLAMA_HOST,
     REFLECT_EVERY,
+    TOPICS,
 )
 from network.discussion import run_discussion
 from network.edges import update_edge
@@ -54,12 +57,18 @@ from network.logger import SimulationLogger
 from network.matching import compute_pairings, ensure_connectivity
 from network.state import EdgeData, NetworkState
 
-# ── Discussion topic ────────────────────────────────────────────────────────
-TOPIC = (
-    "Deutschland nimmt jedes Jahr Hunderttausende Migranten auf – "
-    "doch Integration scheitert immer wieder an Sprache, Arbeit und Kultur. "
-    "Sollte Deutschland die Grenzen für Nicht-EU-Ausländer dauerhaft schließen?"
-)
+# ── Topic schedule ──────────────────────────────────────────────────────────
+# Rounds are divided into equal blocks, one per topic in TOPICS insertion order.
+# The last topic absorbs any remainder when NETWORK_MAX_ROUNDS % len(TOPICS) != 0.
+_TOPIC_LABELS = list(TOPICS.keys())
+_BLOCK_SIZE   = NETWORK_MAX_ROUNDS // len(_TOPIC_LABELS)
+
+
+def _topic_for_round(round_n: int) -> tuple[str, str]:
+    """Return (label, text) for the given round number."""
+    idx = min((round_n - 1) // _BLOCK_SIZE, len(_TOPIC_LABELS) - 1)
+    label = _TOPIC_LABELS[idx]
+    return label, TOPICS[label]
 
 
 def _build_initial_graph(agent_names: list[str]) -> nx.Graph:
@@ -109,6 +118,8 @@ def main() -> None:
         print(f"  {name}: {agent.persona}")
     print(f"{'━' * 60}\n")
 
+    logger.log_personas(agents)
+
     # ── Network initialisation ───────────────────────────────────────────
     G = _build_initial_graph(list(agents.keys()))
     state = NetworkState(agents=agents, graph=G, max_rounds=NETWORK_MAX_ROUNDS)
@@ -125,8 +136,10 @@ def main() -> None:
     # ── Main simulation loop ─────────────────────────────────────────────
     for round_n in range(1, NETWORK_MAX_ROUNDS + 1):
         state.round = round_n
+        topic_label, topic_text = _topic_for_round(round_n)
         print(f"\n{'━' * 60}")
         print(f"Round {round_n} / {NETWORK_MAX_ROUNDS}  "
+              f"│  topic: {topic_label}  "
               f"│  edges: {state.graph.number_of_edges()}  "
               f"│  components: {nx.number_connected_components(state.graph)}")
         if state.idle_agent:
@@ -140,7 +153,8 @@ def main() -> None:
             result = run_discussion(
                 agents[agent_a_name],
                 agents[agent_b_name],
-                TOPIC,
+                topic_text,
+                topic_label=topic_label,
             )
             logger.log_discussion(round_n, agent_a_name, agent_b_name, result)
 
@@ -148,16 +162,18 @@ def main() -> None:
                 state,
                 agent_a_name,
                 agent_b_name,
-                result["vote_a"],
-                result["vote_b"],
+                result["score_a"],
+                result["score_b"],
             )
 
             event_type = "edge_maintained" if survived else "edge_dropped"
             logger.log_edge_event(round_n, event_type, agent_a_name, agent_b_name)
 
             status = "✔ maintained" if survived else "✘ dropped"
-            print(f"    {agent_a_name} → {result['vote_a']}  |  "
-                  f"{agent_b_name} → {result['vote_b']}  |  edge {status}")
+            combined = (result["score_a"] + result["score_b"]) / 2
+            print(f"    {agent_a_name} {result['score_a']:+.2f}  |  "
+                  f"{agent_b_name} {result['score_b']:+.2f}  |  "
+                  f"combined {combined:+.2f}  |  edge {status}")
 
         # ── Reconnect isolated agents ────────────────────────────────────
         ensure_connectivity(state)
@@ -170,8 +186,10 @@ def main() -> None:
                 logger.log_reflection(round_n, agent.name)
 
         # EXTENSION POINT — Banisch opinion update:
+        # Collect round_results = [result, ...] inside the pairings loop above,
+        # then pass them here along with the opinion states.
         # from network.opinion import update_opinion_states, compute_metrics
-        # update_opinion_states(state.opinion_states, last_results, alpha=0.05)
+        # update_opinion_states(state.opinion_states, round_results, alpha=0.05)
         # extra = compute_metrics(state.graph, state.opinion_states)
         # logger.snapshot_network(state, extra_metrics=extra)
 

@@ -1,14 +1,16 @@
 """
 Edge lifecycle management for the network simulation.
 
-Provides ``update_edge``, which applies the social-reward vote from a
-pairwise discussion to the corresponding edge: either strengthening it
-(both agents voted "continue") or removing it (either agent voted "move").
+Provides ``update_edge``, which applies the social-feedback score from a
+pairwise discussion to the corresponding edge: strengthening it when agents
+agree (positive score) or weakening it when they disagree (negative score).
+An edge is removed as soon as its strength falls at or below ``STRENGTH_FLOOR``.
 
-The asymmetric drop rule — either agent can veto continuation — reflects the
-social reality that a relationship only persists if both parties are willing.
-It also produces richer network turnover, which is desirable for studying
-dynamic polarisation.
+This replaces the former binary vote ("continue" / "move") with a continuous
+reward signal.  In Banisch & Olbrich (2019) the reward r = o_i · o_j is binary
+(±1) because public opinions are discrete.  The continuous score used here is a
+deliberate extension: partial agreement yields a fractional adjustment rather
+than a hard switch, allowing for richer edge dynamics.
 
 Note
 ----
@@ -19,7 +21,7 @@ operation.  Import them from there rather than here.
 
 from __future__ import annotations
 
-from config import STRENGTH_CAP
+from config import STRENGTH_CAP, STRENGTH_DELTA, STRENGTH_FLOOR
 from network.state import NetworkState
 
 
@@ -27,20 +29,19 @@ def update_edge(
     state: NetworkState,
     agent_a: str,
     agent_b: str,
-    vote_a: str,
-    vote_b: str,
+    score_a: float,
+    score_b: float,
 ) -> bool:
-    """Apply the post-discussion votes to the edge between two agents.
+    """Adjust edge strength based on the social-feedback scores from both agents.
 
-    Drop rule (asymmetric veto)
-        If *either* agent voted ``"move"``, the edge is removed from the
-        graph immediately.  The agent may be reconnected later by
-        ``ensure_connectivity``.
+    The combined score — the average of both agents' concordance ratings — is
+    multiplied by ``STRENGTH_DELTA`` and added to the current edge strength.
+    Agreement (positive combined score) strengthens the edge; disagreement
+    (negative combined score) weakens it.  The edge is removed immediately if
+    strength falls at or below ``STRENGTH_FLOOR``.
 
-    Strengthen rule
-        If *both* agents voted ``"continue"``, ``EdgeData.strength`` is
-        incremented by a fixed bonus (0.2) up to ``STRENGTH_CAP``, and
-        ``EdgeData.rounds_active`` is incremented.
+    Strength is capped at ``STRENGTH_CAP`` to prevent runaway accumulation.
+    ``EdgeData.rounds_active`` is incremented whenever the edge survives.
 
     Parameters
     ----------
@@ -50,24 +51,26 @@ def update_edge(
         Name of the first agent in the pair.
     agent_b:
         Name of the second agent in the pair.
-    vote_a:
-        Social-reward vote from ``agent_a.evaluate()``.  Either
-        ``"continue"`` or ``"move"``.
-    vote_b:
-        Social-reward vote from ``agent_b.evaluate()``.  Same format.
+    score_a:
+        Concordance score from ``agent_a.evaluate()`` in [−1.0, 1.0].
+        Positive = agreement, negative = disagreement.
+    score_b:
+        Concordance score from ``agent_b.evaluate()``.  Same range.
 
     Returns
     -------
     bool
         ``True`` if the edge survived, ``False`` if it was removed.
     """
-    _STRENGTH_BONUS = 0.2
+    combined = (score_a + score_b) / 2.0
 
-    if vote_a == "move" or vote_b == "move":
+    edge = state.graph[agent_a][agent_b]["data"]
+    edge.strength += combined * STRENGTH_DELTA
+    edge.strength = max(0.0, min(STRENGTH_CAP, edge.strength))
+
+    if edge.strength <= STRENGTH_FLOOR:
         state.graph.remove_edge(agent_a, agent_b)
         return False
 
-    edge = state.graph[agent_a][agent_b]["data"]
-    edge.strength = min(STRENGTH_CAP, edge.strength + _STRENGTH_BONUS)
     edge.rounds_active += 1
     return True

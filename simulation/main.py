@@ -1,20 +1,18 @@
 """
 Entry point — pairwise simulation mode.
 
-Two agents hold a sequential round-based conversation, reflecting and
-evaluating at configurable intervals.  This is a direct Python reimplementation
-of the former LangGraph-based loop; the console output is identical but the
-graph machinery has been removed entirely.
+Runs the same round structure as the network simulation but with exactly two
+agents and no graph machinery.  Each simulation round is one complete discussion
+of ``DISCUSSION_TURNS`` exchanges.  Conversation continuity across rounds is
+maintained through each agent's persistent memory store.
 
 Round structure
 ---------------
-Each of the ``DEFAULT_MAX_ROUNDS`` rounds both agents speak once (in list
-order).  After the round:
-
-* Every ``REFLECT_EVERY`` rounds all agents reflect on their recent memories.
-* Every ``EVAL_EVERY`` rounds all agents cast a social-reward vote
-  (``weiter`` / ``wechseln``).  A single ``wechseln`` vote ends the
-  conversation early.
+1. Determine the active topic from the ``TOPICS`` schedule.
+2. Run one discussion (``DISCUSSION_TURNS`` exchanges via ``run_discussion()``).
+3. Adjust the simulated edge strength by the combined concordance score.
+   The conversation ends early if strength falls to or below ``STRENGTH_FLOOR``.
+4. Every ``REFLECT_EVERY`` rounds all agents reflect on their recent memories.
 
 Configuration
 -------------
@@ -27,66 +25,80 @@ from langchain_ollama import OllamaLLM
 from agents.agent import Agent
 from agents.personas import sample_personas
 from config import (
-    DEFAULT_MAX_ROUNDS,
-    EVAL_EVERY,
     LLM_MODEL,
+    NETWORK_MAX_ROUNDS,
     NUM_AGENTS,
     OLLAMA_HOST,
     REFLECT_EVERY,
+    STRENGTH_CAP,
+    STRENGTH_DELTA,
+    STRENGTH_FLOOR,
+    TOPICS,
 )
+from network.discussion import run_discussion
+from network.logger import SimulationLogger
 
-_OPENING = (
-    "Deutschland nimmt jedes Jahr Hunderttausende Migranten auf – "
-    "doch Integration scheitert immer wieder an Sprache, Arbeit und Kultur. "
-    "Sollte Deutschland die Grenzen für Nicht-EU-Ausländer dauerhaft schließen?"
-)
+# ── Topic schedule (mirrors main_network.py logic) ───────────────────────────
+_TOPIC_LABELS = list(TOPICS.keys())
+_BLOCK_SIZE   = NETWORK_MAX_ROUNDS // len(_TOPIC_LABELS)
+
+
+def _topic_for_round(round_n: int) -> tuple[str, str]:
+    """Return (label, text) for the given simulation round."""
+    idx = min((round_n - 1) // _BLOCK_SIZE, len(_TOPIC_LABELS) - 1)
+    label = _TOPIC_LABELS[idx]
+    return label, TOPICS[label]
 
 
 def main() -> None:
-    """Run the two-agent pairwise conversation."""
+    """Run the two-agent pairwise simulation."""
     llm = OllamaLLM(model=LLM_MODEL, base_url=f"http://{OLLAMA_HOST}")
+    logger = SimulationLogger()
 
     print(f"\nSampling {NUM_AGENTS} personas...")
     personas = sample_personas(NUM_AGENTS, llm)
-    agents = [
-        Agent(name=p["name"], persona=p["persona"], llm=llm) for p in personas
-    ]
+    agents = [Agent(name=p["name"], persona=p["persona"], llm=llm) for p in personas]
+
     print(f"\n{'━' * 50}")
     print("Participants")
     for a in agents:
         print(f"  {a.name}: {a.persona}")
-    print(f"{'━' * 50}")
+    print(f"{'━' * 50}\n")
 
-    print(f"\n Moderator: {_OPENING}\n")
+    logger.log_personas({a.name: a for a in agents})
 
-    # Full message history; agents[0] always speaks first each round
-    messages: list[dict] = [{"speaker": "Moderator", "content": _OPENING}]
+    edge_strength = 1.0   # simulated relationship strength between the two agents
 
-    for round_n in range(1, DEFAULT_MAX_ROUNDS + 1):
+    for round_n in range(1, NETWORK_MAX_ROUNDS + 1):
+        topic_label, topic_text = _topic_for_round(round_n)
 
-        # ── Each agent speaks once per round ─────────────────────────────
-        for agent in agents:
-            last = messages[-1]
-            reply = agent.respond(last["content"], last["speaker"])
-            print(f"\n{agent.name}: {reply}")
-            messages.append({"speaker": agent.name, "content": reply})
+        print(f"\n{'━' * 50}")
+        print(f"Round {round_n} / {NETWORK_MAX_ROUNDS}  │  topic: {topic_label}  │  strength: {edge_strength:.2f}")
+        print(f"{'━' * 50}")
+
+        # ── Discussion ────────────────────────────────────────────────────
+        result = run_discussion(agents[0], agents[1], topic_text, topic_label=topic_label)
+
+        # ── Edge strength update (same formula as network/edges.py) ───────
+        combined = (result["score_a"] + result["score_b"]) / 2
+        edge_strength += combined * STRENGTH_DELTA
+        edge_strength = max(0.0, min(STRENGTH_CAP, edge_strength))
+
+        print(f"\n  {agents[0].name} {result['score_a']:+.2f}  │  "
+              f"{agents[1].name} {result['score_b']:+.2f}  │  "
+              f"combined {combined:+.2f}  │  strength → {edge_strength:.2f}")
+
+        if edge_strength <= STRENGTH_FLOOR:
+            print("\n  ✋ Conversation ended: relationship strength reached zero.")
+            break
 
         # ── Reflection phase ──────────────────────────────────────────────
         if round_n % REFLECT_EVERY == 0:
-            print("\n\n── Reflection phase ──")
+            print(f"\n── Reflection phase (round {round_n}) ──")
             for agent in agents:
                 agent.reflect()
 
-        # ── Evaluation phase ──────────────────────────────────────────────
-        if round_n % EVAL_EVERY == 0:
-            print("\n\n── Evaluation phase ──")
-            transcript = messages[1:]  # pass full history, excluding moderator opening
-            votes = [agent.evaluate(transcript) for agent in agents]
-            if any(v["vote"] == "move" for v in votes):
-                print("\n  ✋ Conversation stopped by agent vote.")
-                break
-
-    print("\n\n --Conversation complete--")
+    print("\n\n --Simulation complete--")
 
 
 if __name__ == "__main__":

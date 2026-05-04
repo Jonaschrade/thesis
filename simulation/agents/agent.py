@@ -2,16 +2,17 @@
 Agent: synthesises persona, memory, and reflection into conversational behaviour.
 
 Public API:
-    agent.respond(message, speaker) -> str   called by the LangGraph node each turn
-    agent.reflect()                          called internally every REFLECT_EVERY rounds
-    agent.evaluate(messages) -> dict         called internally every EVAL_EVERY rounds
+    agent.respond(message, speaker) -> str   generate an opinion-bearing reply
+    agent.reflect()                          synthesise insights from recent memories
+    agent.evaluate(messages) -> dict         rate opinion concordance as a continuous score
 """
 
 import ollama as ol
 from langchain_ollama import OllamaLLM
 
-from config import EMBED_MODEL, MAX_MEMORIES_SEED, REFLECT_EVERY, OLLAMA_HOST
+from config import EMBED_MODEL, MAX_MEMORIES_SEED, OLLAMA_HOST
 from memory.store import MemoryStore
+
 
 class Agent:
     def __init__(self, name: str, persona: str, llm: OllamaLLM):
@@ -26,7 +27,6 @@ class Agent:
         self.persona = persona
         self.llm = llm
         self.memory = MemoryStore(name)
-        self._interactions = 0
 
     # private helpers --------------------------------------------------------
 
@@ -47,7 +47,7 @@ class Agent:
         ).strip()
         try:
             return float(raw.split()[0])
-        except ValueError:
+        except (ValueError, IndexError):
             return 5.0
 
     def _store(self, content: str, mem_type: str = "interaction") -> None:
@@ -153,23 +153,26 @@ class Agent:
     # evaluate ---------------------------------------------------------------
 
     def evaluate(self, messages: list[dict]) -> dict:
-        """Cast a social-feedback vote on whether to continue this conversation.
+        """Rate opinion concordance with the conversation partner on a continuous scale.
 
         Implements the social feedback mechanism from Banisch & Olbrich (2019):
         the reward signal is determined exclusively by opinion concordance.
-        Agreement with the conversation partner is a positive experience that
-        reinforces conviction and motivates continuation; disagreement is a
-        negative experience that undermines conviction and triggers partner-
-        switching.  General social factors (politeness, conversational style,
-        feeling heard) are deliberately excluded — only the alignment of
-        expressed positions on the topic counts.
+        A positive score reflects agreement (reinforces the relationship); a
+        negative score reflects disagreement (weakens it).  General social
+        factors — politeness, conversational style, feeling heard — are
+        deliberately excluded.
+
+        The returned score is used by ``network/edges.py`` to adjust edge
+        strength.  Edges whose strength falls at or below ``STRENGTH_FLOOR``
+        are severed.
 
         Args:
             messages: Current conversation history as a list of
                       {"speaker": str, "content": str} dicts.
 
         Returns:
-            {"agent": str, "vote": "continue"|"move", "reason": str}
+            {"agent": str, "score": float, "reason": str}
+            ``score`` is clamped to [−1.0, 1.0].
         """
         transcript = "\n".join(
             f"{m['speaker']}: {m['content']}" for m in messages
@@ -179,24 +182,26 @@ class Agent:
             f"Du bist {self.name}. {self.persona}\n\n"
             f"Hier ist das bisherige Gespräch:\n{transcript}\n\n"
             f"Beurteile dieses Gespräch ausschließlich anhand der inhaltlichen Übereinstimmung "
-            f"eurer Meinungen zum Thema: Hat dein Gesprächspartner überwiegend dieselbe Haltung "
-            f"vertreten wie du, oder hat er widersprochen und eine gegensätzliche Position eingenommen?\n\n"
-            f"Übereinstimmung ist eine positive Erfahrung – sie bestärkt deine Überzeugung und "
-            f"lässt dich das Gespräch fortsetzen wollen. "
-            f"Widerspruch ist eine negative Erfahrung – er untergräbt deine Überzeugung und "
-            f"lässt dich nach einem anderen Gesprächspartner suchen.\n\n"
+            f"eurer Meinungen zum Thema. Bewerte auf einer Skala von -1.0 bis 1.0:\n"
+            f"  1.0 = vollständige Übereinstimmung – dein Gesprächspartner vertritt dieselbe Position\n"
+            f"  0.0 = gemischte oder unklare Meinungen, kein klarer Konsens\n"
+            f" -1.0 = vollständiger Widerspruch – dein Gesprächspartner vertritt die entgegengesetzte Position\n\n"
             f"Antworte genau in diesem Format:\n"
-            f"STIMME: weiter\nBEGRÜNDUNG: <ein Satz>\n\n"
-            f"oder\n\nSTIMME: wechseln\nBEGRÜNDUNG: <ein Satz>"
+            f"BEWERTUNG: <Zahl zwischen -1.0 und 1.0, z.B. 0.5 oder -0.8>\n"
+            f"MEINUNGSABGLEICH: <ein Satz über die Übereinstimmung oder den Widerspruch eurer Positionen>"
         ).strip()
-        
-        vote = "continue"
+
+        score = 0.0
         reason = ""
         for line in raw.splitlines():
-            if line.upper().startswith("STIMME:"):
-                vote = "move" if "wechseln" in line.lower() else "continue"
-            elif line.upper().startswith("BEGRÜNDUNG:"):
+            if line.upper().startswith("BEWERTUNG:"):
+                try:
+                    score = float(line.split(":", 1)[-1].strip().replace(",", "."))
+                    score = max(-1.0, min(1.0, score))
+                except ValueError:
+                    score = 0.0
+            elif line.upper().startswith("MEINUNGSABGLEICH:"):
                 reason = line.split(":", 1)[-1].strip()
 
-        print(f"\n  🗳  {self.name} stimmt ab '{vote}': {reason}")
-        return {"agent": self.name, "vote": vote, "reason": reason}
+        print(f"\n  📊 {self.name} bewertet: {score:+.2f} – {reason}")
+        return {"agent": self.name, "score": score, "reason": reason}

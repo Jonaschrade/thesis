@@ -68,6 +68,33 @@ class SimulationLogger:
 
     # ── public logging methods ──────────────────────────────────────────────
 
+    def log_personas(self, agents: dict) -> None:
+        """Write all agent personas to ``personas.json`` in the run directory.
+
+        Called once at startup so that every run has a persistent record of
+        which agents participated and what their persona descriptions were.
+        This allows post-hoc correlation of agent behaviour with persona
+        attributes even if the console output is lost.
+
+        Output path: ``logs/run_<timestamp>/personas.json``
+
+        Parameters
+        ----------
+        agents:
+            Mapping of agent name to ``Agent`` instance, as used throughout
+            the simulation.  Each entry's ``name`` and ``persona`` attributes
+            are written; all other state is ignored.
+        """
+        records = [
+            {"name": name, "persona": agent.persona}
+            for name, agent in agents.items()
+        ]
+        path = self.run_dir / "personas.json"
+        path.write_text(
+            json.dumps(records, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
     def log_discussion(
         self,
         round_n: int,
@@ -87,8 +114,8 @@ class SimulationLogger:
             Name of the second participant.
         result:
             The dict returned by ``network.discussion.run_discussion``.
-            Keys ``turns``, ``vote_a``, ``reason_a``, ``vote_b``,
-            ``reason_b`` are included verbatim.
+            Keys ``transcript``, ``topic_label``, ``score_a``, ``reason_a``,
+            ``score_b``, ``reason_b`` are included verbatim.
         """
         self._write({
             "type":    "discussion",

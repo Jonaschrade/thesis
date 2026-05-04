@@ -27,10 +27,11 @@ class EdgeData:
     Attributes
     ----------
     strength:
-        A floating-point weight that grows each time both endpoints vote
-        "continue" after a discussion (capped at ``STRENGTH_CAP`` from
-        config).  Used as the matching weight during pairing so that
-        well-established relationships are preferred over new ones.
+        A floating-point weight adjusted after each discussion by the
+        combined concordance score × ``STRENGTH_DELTA``.  Positive scores
+        (agreement) increase it; negative scores (disagreement) decrease it.
+        Capped at ``STRENGTH_CAP``.  Used as the matching weight during
+        pairing so that well-established relationships are preferred.
     rounds_active:
         Counter incremented after every discussion in which the edge
         survives.  Useful for post-hoc analysis of relationship duration.
