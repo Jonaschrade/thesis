@@ -46,7 +46,7 @@ For each simulation round:
 ### `config.py` — append only (no removals)
 ```python
 # Network simulation
-NUM_AGENTS_NETWORK = 20
+NUM_AGENTS         = 20
 NETWORK_MAX_ROUNDS = 30
 DISCUSSION_TURNS   = 6        # LLM turns per pairwise discussion (must be even)
 INITIAL_GRAPH_K    = 4        # Watts-Strogatz k (initial avg degree)
@@ -188,7 +188,7 @@ def main():
     llm = OllamaLLM(...)
     logger = SimulationLogger()
 
-    personas = sample_personas(NUM_AGENTS_NETWORK, llm)
+    personas = sample_personas(NUM_AGENTS, llm)
     agents = {p["name"]: Agent(p["name"], p["persona"], llm) for p in personas}
 
     G = nx.watts_strogatz_graph(len(agents), k=INITIAL_GRAPH_K, p=INITIAL_GRAPH_P)
@@ -292,9 +292,9 @@ Both metrics are returned as a dict and passed to `snapshot_network(state, extra
 
 ## Verification
 
-1. Set `NUM_AGENTS_NETWORK=4`, `NETWORK_MAX_ROUNDS=3`, `DISCUSSION_TURNS=2`
+1. Set `NUM_AGENTS=4`, `NETWORK_MAX_ROUNDS=3`, `DISCUSSION_TURNS=2`
 2. Run `python main_network.py` → 2 pairs/round, 3 round snapshots in `logs/`
 3. Inspect `events.jsonl` — verify turns, votes, edge events present
 4. Inspect `network_rounds/round_0003.json` — verify edge list, density, component count
 5. Force `evaluate()` to always return `"move"` → verify all edges drop and reconnect fires
-6. Scale to `NUM_AGENTS_NETWORK=20`, 5 rounds; verify no crashes, memory per agent grows
+6. Scale to `NUM_AGENTS=20`, 5 rounds; verify no crashes, memory per agent grows

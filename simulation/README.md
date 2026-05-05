@@ -220,7 +220,7 @@ python main_network.py
 For a quick smoke test, set in `config.py`:
 
 ```python
-NUM_AGENTS_NETWORK = 4
+NUM_AGENTS         = 4
 NETWORK_MAX_ROUNDS = 3   # must be divisible by len(TOPICS) for equal blocks
 DISCUSSION_TURNS   = 2   # 2 exchanges per discussion = 4 turns total
 ```
@@ -242,17 +242,11 @@ On startup, personas are sampled at random from `data/german_personas.json` (5 2
 | `MAX_MEMORIES_RETRIEVE` | `5` | Memories surfaced per agent response/reflection |
 | `MEMORY_PERSIST` | `False` | Persist ChromaDB to disk |
 
-### Pairwise mode only
-
-| Setting | Default | Description |
-|---|---|---|
-| `NUM_AGENTS` | `2` | Agents per run |
-
 ### Network mode only
 
 | Setting | Default | Description |
 |---|---|---|
-| `NUM_AGENTS_NETWORK` | `20` | Agents in the network |
+| `NUM_AGENTS` | `20` | Agents in the network (pairwise mode always uses 2) |
 | `NETWORK_MAX_ROUNDS` | `30` | Total simulation rounds (used by both modes) |
 | `DISCUSSION_TURNS` | `3` | Exchanges per discussion (total turns = value × 2) |
 | `INITIAL_GRAPH_K` | `4` | Watts-Strogatz k (initial avg degree) |

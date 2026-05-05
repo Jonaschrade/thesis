@@ -47,7 +47,7 @@ from config import (
     INITIAL_GRAPH_P,
     LLM_MODEL,
     NETWORK_MAX_ROUNDS,
-    NUM_AGENTS_NETWORK,
+    NUM_AGENTS,
     OLLAMA_HOST,
     REFLECT_EVERY,
     TOPICS,
@@ -106,8 +106,8 @@ def main() -> None:
     logger = SimulationLogger()
 
     # ── Agent initialisation ─────────────────────────────────────────────
-    print(f"\nSampling {NUM_AGENTS_NETWORK} personas...")
-    personas = sample_personas(NUM_AGENTS_NETWORK, llm)
+    print(f"\nSampling {NUM_AGENTS} personas...")
+    personas = sample_personas(NUM_AGENTS, llm)
     agents: dict[str, Agent] = {
         p["name"]: Agent(name=p["name"], persona=p["persona"], llm=llm)
         for p in personas

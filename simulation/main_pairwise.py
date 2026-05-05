@@ -28,7 +28,6 @@ from agents.personas import sample_personas
 from config import (
     LLM_MODEL,
     NETWORK_MAX_ROUNDS,
-    NUM_AGENTS,
     OLLAMA_HOST,
     REFLECT_EVERY,
     STRENGTH_CAP,
@@ -56,8 +55,8 @@ def main() -> None:
     llm = OllamaLLM(model=LLM_MODEL, base_url=f"http://{OLLAMA_HOST}")
     logger = SimulationLogger()
 
-    print(f"\nSampling {NUM_AGENTS} personas...")
-    personas = sample_personas(NUM_AGENTS, llm)
+    print(f"\nSampling 2 personas...")
+    personas = sample_personas(2, llm)
     agents = [Agent(name=p["name"], persona=p["persona"], llm=llm) for p in personas]
 
     print(f"\n{'━' * 50}")

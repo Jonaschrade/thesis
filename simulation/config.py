@@ -33,11 +33,8 @@ WEIGHT_RECENCY    = 0.3
 WEIGHT_IMPORTANCE = 0.3
 WEIGHT_RELEVANCE  = 0.4
 
-# ── Pairwise simulation ───────────────────────────────────────────────────────
-NUM_AGENTS = 2   # agents to sample and instantiate
-
 # ── Network simulation ────────────────────────────────────────────────────────
-NUM_AGENTS_NETWORK = 4     # total agents in the network graph
+NUM_AGENTS         = 4     # total agents in the network graph (pairwise mode always uses 2)
 NETWORK_MAX_ROUNDS = 3     # total simulation rounds (used by both modes)
 DISCUSSION_TURNS   = 2      # exchanges per discussion (total turns = DISCUSSION_TURNS × 2)
 INITIAL_GRAPH_K    = 4      # Watts-Strogatz k parameter (initial avg degree ≈ k)
