@@ -1,35 +1,79 @@
 """
-Agent pairing and network reconnection for the network simulation.
+Agent partner selection and network reconnection for the network simulation.
 
-Each round, agents are matched into pairs for pairwise discussions using a
-single step:
+The primary entry point is ``select_responder``, which implements the
+asymmetric interaction rule from Jacob & Banisch (2023): given an expresser
+and its graph neighbours, it draws a responder with an optional homophily
+bias h.  At h = 0 the draw is uniform (replicating Banisch & Olbrich 2019);
+at h > 0, neighbours whose Q-gap is similar to the expresser's receive higher
+weight, representing the tendency to seek out like-minded interlocutors.
 
-**Max-weight matching over existing edges.**  NetworkX's implementation of
-Edmonds' blossom algorithm finds the maximum-weight matching on the current
-edge set, using the sum of ``EdgeData.strengths`` (both agents' internal
-valuations) as the weight.  This ensures that mutually valued relationships
-are given priority.
-
-Agents left unmatched (because the graph is sparse or disconnected) pause
-that discussion round.  Their edge strengths and memories are unchanged.
-
-Odd agent counts are handled by rotating one agent out each round.
-
-Reconnection
-------------
-After each round's edge updates, agents whose degree has dropped to zero
-are reconnected by ``ensure_connectivity``.  A uniformly random partner is
-chosen from all other agents and a new introductory edge at ``strength=0.5``
-is added.
+``compute_pairings`` and ``ensure_connectivity`` are retained for the
+``GRAPH_DYNAMIC = True`` extension (endogenous tie rewiring).
 """
 
 from __future__ import annotations
 
+import math
 import random
 
 import networkx as nx
 
 from network.state import EdgeData, NetworkState
+
+
+def select_responder(
+    expresser: str,
+    neighbours: list[str],
+    opinion_states: dict,
+    h: float,
+) -> str:
+    """Draw a responder from the expresser's neighbours with homophily bias h.
+
+    Implements the partner-selection mechanism from Jacob & Banisch (2023):
+    interaction probability is weighted by conviction similarity, controlled
+    by h.  Keeping this as a standalone function means the virtual-worlds
+    multi-platform extension can swap in a different draw (e.g. cross-platform
+    neighbours) without touching the interaction loop.
+
+    Weight formula:  w_j = exp(−h · |Δq_i − Δq_j|)
+
+    where Δq = q_pos − q_neg is each agent's signed conviction.
+
+    Parameters
+    ----------
+    expresser:
+        Name of the agent expressing an opinion this interaction.
+    neighbours:
+        Adjacency list of the expresser (already filtered to non-empty).
+    opinion_states:
+        Mapping of agent name to ``AgentOpinionState``.
+    h:
+        Homophily parameter ≥ 0.
+        h = 0 → uniform draw (Banisch & Olbrich 2019).
+        h > 0 → neighbours with similar q_gap weighted higher.
+
+    Returns
+    -------
+    str
+        Name of the selected responder.
+    """
+    if h == 0.0:
+        return random.choice(neighbours)
+
+    expresser_gap = opinion_states[expresser].q_gap
+    weights = [
+        math.exp(-h * abs(expresser_gap - opinion_states[n].q_gap))
+        for n in neighbours
+    ]
+    total = sum(weights)
+    r = random.random() * total
+    cumulative = 0.0
+    for name, w in zip(neighbours, weights):
+        cumulative += w
+        if r <= cumulative:
+            return name
+    return neighbours[-1]
 
 
 def compute_pairings(state: NetworkState) -> list[tuple[str, str]]:

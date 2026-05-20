@@ -1,17 +1,15 @@
 """
 Edge lifecycle management for the network simulation.
 
-Provides ``update_edge``, which applies the social-feedback score from a
-pairwise discussion to each agent's internal valuation of the edge.  Each
-agent maintains their own value independently; the edge is severed as soon
-as *either* agent's value falls to or below ``STRENGTH_FLOOR``.  The
-matching weight is the sum of both values, so mutually valued relationships
-are preferred in pairing.
+Provides ``update_edge``, which applies a concordance score from a pairwise
+discussion to each agent's internal valuation of the edge.  Each agent
+maintains their own value independently; the edge is severed as soon as
+*either* agent's value falls to or below ``STRENGTH_FLOOR``.
 
-In Banisch & Olbrich (2019) the reward r = o_i · o_j is binary (±1) because
-public opinions are discrete.  The continuous score used here is a deliberate
-extension: partial agreement yields a fractional adjustment rather than a hard
-switch, allowing for richer edge dynamics.
+This module is only active when ``GRAPH_DYNAMIC = True`` in config.  In the
+default fixed-graph mode (main SFT experiments), ``update_edge`` is not
+called and the graph structure set at initialisation is preserved for the
+full run.
 
 Note
 ----

@@ -2,9 +2,19 @@
 Agent: synthesises persona, memory, and reflection into conversational behaviour.
 
 Public API:
-    agent.respond(message, speaker) -> str   generate an opinion-bearing reply
-    agent.reflect()                          synthesise insights from recent memories
-    agent.evaluate(messages) -> dict         rate opinion concordance as a continuous score
+    agent.respond(message, speaker, expressed_opinion) -> str
+        Generate an opinion-bearing reply conditioned on the agent's
+        current SFT expressed opinion (+1 or −1).
+    agent.classify_reward(reaction_text) -> float
+        Lightweight, context-free classifier that maps a partner's
+        reaction text to a scalar reward in [−1, +1] for the Q-value
+        TD update.  Kept structurally separate from respond() so that
+        expression and evaluation do not share prompt context.
+    agent.reflect()
+        Synthesise insights from recent memories.
+    agent.evaluate(messages) -> dict
+        Full-transcript concordance score; used for edge dynamics when
+        GRAPH_DYNAMIC = True.
 """
 
 import ollama as ol
@@ -110,23 +120,25 @@ class Agent:
 
     # respond ----------------------------------------------------------------
 
-    def respond(self, message: str, speaker: str) -> str:
+    def respond(
+        self,
+        message: str,
+        speaker: str,
+        expressed_opinion: int | None = None,
+    ) -> str:
         """Generate a response to message from speaker.
 
         Retrieves relevant memories to provide context, then prompts the agent
-        to take a clear position on the discussed topic — not merely to stay
-        in character, but to express their own opinion directly.  This ensures
-        the response carries a legible opinion signal so that the social-
-        feedback evaluation (``evaluate()``) can reliably detect concordance
-        or discordance between the two agents, as required by the Banisch &
-        Olbrich (2019) social feedback mechanism.
-
-        The full interaction is stored as a new memory after the response is
-        generated.
+        to take a clear position on the discussed topic.  When ``expressed_opinion``
+        is supplied (+1 or −1), the prompt anchors the agent to that SFT stance
+        so that expressed language is consistent with the agent's current Q-state
+        rather than being regenerated from scratch each turn.
 
         Args:
-            message: The incoming message text.
-            speaker: The name of the agent or moderator who sent the message.
+            message:           The incoming message text.
+            speaker:           Name of the agent or moderator who sent the message.
+            expressed_opinion: SFT stance to anchor on: +1 (pro) or −1 (contra).
+                               None disables anchoring (backward-compatible default).
 
         Returns:
             The agent's reply as a plain string.
@@ -137,9 +149,19 @@ class Agent:
             if mems else "(noch keine)"
         )
 
+        if expressed_opinion is not None:
+            stance_label = "Ja" if expressed_opinion == 1 else "Nein"
+            stance_hint = (
+                f"Deine aktuelle Haltung zur diskutierten Frage lautet: {stance_label}. "
+                f"Formuliere deine Antwort ausgehend von dieser Überzeugung.\n\n"
+            )
+        else:
+            stance_hint = ""
+
         response = self.llm.invoke(
             f"Du bist {self.name}. {self.persona}\n\n"
             f"Relevante Erinnerungen:\n{mem_block}\n\n"
+            f"{stance_hint}"
             f"{speaker} sagt: \"{message}\"\n\n"
             f"Beziehe klar Stellung zum diskutierten Thema – so, wie {self.name} es aufgrund "
             f"seiner Überzeugungen und Lebenserfahrung tun würde. "
@@ -148,6 +170,42 @@ class Agent:
 
         self._store(f"{speaker} sagte: '{message}'. Ich antwortete: '{response}'")
         return response
+
+    # classify_reward --------------------------------------------------------
+
+    def classify_reward(self, reaction_text: str) -> float:
+        """Classify a partner's reaction as a scalar reward in [−1.0, 1.0].
+
+        This is the social feedback signal r that drives the SFT Q-value
+        TD update.  It is deliberately minimal — no persona, no memory, no
+        transcript context — so that expression (respond) and reward
+        (classify_reward) remain causally independent.  This prevents the
+        generating LLM from self-scoring in a contaminated context, a known
+        validity problem in LLM-ABM research (Chuang et al. 2024).
+
+        The classifier asks only: does this reaction agree (+1) or disagree
+        (−1) with the position the partner is reacting to?  Ambivalence
+        maps to values near 0, preserving the mixed-feedback signal that
+        binary SFT cannot represent.
+
+        Args:
+            reaction_text: The partner's most recent message text.
+
+        Returns:
+            float in [−1.0, 1.0].  Positive = agreement, negative = disagreement.
+        """
+        raw = self.llm.invoke(
+            f"Bewerte die folgende Aussage: Drückt sie Zustimmung oder Ablehnung aus?\n\n"
+            f"Aussage: \"{reaction_text}\"\n\n"
+            f"Antworte nur mit einer einzigen Zahl zwischen -1.0 und 1.0:\n"
+            f"  1.0 = klare Zustimmung\n"
+            f"  0.0 = ambivalent oder unklar\n"
+            f" -1.0 = klare Ablehnung"
+        ).strip()
+        try:
+            return max(-1.0, min(1.0, float(raw.split()[0].replace(",", "."))))
+        except (ValueError, IndexError):
+            return 0.0
 
     # evaluate ---------------------------------------------------------------
 

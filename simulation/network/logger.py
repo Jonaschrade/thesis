@@ -183,12 +183,13 @@ class SimulationLogger:
         self,
         state: NetworkState,
         extra_metrics: dict | None = None,
+        opinion_states: dict | None = None,
     ) -> None:
         """Write a full network snapshot for the current round.
 
         The snapshot contains the complete edge list (with strength and
-        activity count), basic graph metrics, and any additional metrics
-        supplied by the caller.
+        activity count), basic graph metrics, SFT polarization metrics,
+        and per-agent Q-value trajectories.
 
         Output path: ``network_rounds/round_NNNN.json``
 
@@ -197,11 +198,14 @@ class SimulationLogger:
         state:
             The current ``NetworkState``.
         extra_metrics:
-            Optional dict of additional metrics to merge into the
-            ``"metrics"`` section.  Reserved for Banisch opinion-state
-            metrics (``n_d``, ``dispersion``, etc.) once
-            ``network/opinion.py`` is implemented.  Pass ``None`` (default)
-            to omit.
+            Optional dict of scalar metrics to merge into the ``"metrics"``
+            section (e.g. SFT polarization measures: n_pos, n_neg,
+            dispersion, mean_q_gap).
+        opinion_states:
+            Optional dict of per-agent Q-value snapshots, as returned by
+            ``network.opinion.opinion_states_to_dict()``.  Stored as a
+            top-level ``"opinion_states"`` field in the snapshot so that
+            Q-trajectories can be reconstructed from the log files.
         """
         edges = [
             {
@@ -225,13 +229,15 @@ class SimulationLogger:
         if extra_metrics:
             metrics.update(extra_metrics)
 
-        snapshot = {
+        snapshot: dict = {
             "round":      state.round,
             "idle_agent": state.idle_agent,
             "nodes":      list(state.agents.keys()),
             "edges":      edges,
             "metrics":    metrics,
         }
+        if opinion_states:
+            snapshot["opinion_states"] = opinion_states
 
         path = self.rounds_dir / f"round_{state.round:04d}.json"
         path.write_text(

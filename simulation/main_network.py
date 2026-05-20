@@ -1,41 +1,39 @@
 """
 Network simulation entry point.
 
-Runs the full network simulation: a Watts-Strogatz small-world graph of
-agents who hold pairwise discussions each simulation round and adjust their
-communication edges based on continuous social-feedback scores.
+Implements the asymmetric interaction model from Jacob & Banisch (2023) on a
+single Stochastic Block Model (SBM) graph.  Agent opinion dynamics are
+governed by Social Feedback Theory (Banisch & Olbrich 2019): each agent holds
+Q-values over opinion stances (+1 / −1), expresses a stance drawn by softmax
+with inverse temperature β, and updates that Q-value via a TD rule after each
+interaction.
 
-A simulation round is one complete discussion (``DISCUSSION_TURNS`` exchanges)
-between each active pair — the same unit used in pairwise mode (``main.py``).
+Interaction rule (asymmetric)
+------------------------------
+The unit of dynamics is a single asymmetric interaction:
 
-Round structure
----------------
-1. Determine the active topic from the ``TOPICS`` schedule.
-2. Compute pairings via max-weight matching over existing edges; unmatched
-   agents pause the round.
-3. Each pair holds one discussion (``DISCUSSION_TURNS`` exchanges); both agents
-   then rate opinion concordance on [−1.0, 1.0] via ``evaluate()``.
-4. Each agent's internal edge valuation is adjusted by their own score ×
-   ``STRENGTH_DELTA``.  The edge is removed when either agent's valuation
-   falls to or below ``STRENGTH_FLOOR``.
-5. Isolated agents are reconnected before the next round.
-6. Every ``REFLECT_EVERY`` simulation rounds all agents reflect on their memories.
-7. The network state is snapshotted to ``logs/run_<timestamp>/``.
+  1. Draw one expresser uniformly from agents with at least one neighbour.
+  2. Draw one responder from the expresser's neighbours with homophily bias h
+     (h = 0 recovers uniform, replicating Banisch & Olbrich 2019).
+  3. Expresser's stance is drawn by softmax(β).
+  4. One exchange: expresser speaks, responder reacts.
+  5. classify_reward() on the responder's reaction → reward r.
+  6. Q-update for the expresser only: Q(o_i) ← (1−α)·Q(o_i) + α·r.
+
+A "round" groups INTERACTIONS_PER_ROUND such events for snapshotting.
+
+Experimental variables
+-----------------------
+SBM_P_INTER   — between-community coupling; sweep for polarization phase transition
+HOMOPHILY_H   — partner-selection bias; 0 = uniform (2019 baseline), >0 = 2023 model
+OPINION_BETA  — softmax inverse temperature; β=0 is 50/50, β→∞ is argmax
 
 Configuration
 -------------
-All tunable parameters live in ``config.py``.  For a quick smoke test, set::
-
-    NUM_AGENTS_NETWORK = 4
-    NETWORK_MAX_ROUNDS = 3
-    DISCUSSION_TURNS   = 2
-
-Extension point
----------------
-To activate Banisch & Olbrich opinion tracking, import and wire up
-``network/opinion.py`` here (see the inline comments marked EXTENSION POINT).
-No other file needs to change.
+All tunable parameters live in ``config.py``.
 """
+
+import random
 
 import networkx as nx
 from langchain_ollama import OllamaLLM
@@ -43,60 +41,74 @@ from langchain_ollama import OllamaLLM
 from agents.agent import Agent
 from agents.personas import sample_personas
 from config import (
-    INITIAL_GRAPH_K,
-    INITIAL_GRAPH_P,
+    GRAPH_DYNAMIC,
+    HOMOPHILY_H,
+    INTERACTIONS_PER_ROUND,
+    LEARNING_RATE,
     LLM_MODEL,
     NETWORK_MAX_ROUNDS,
     NUM_AGENTS,
     OLLAMA_HOST,
+    OPINION_BETA,
     REFLECT_EVERY,
-    TOPICS,
+    SBM_NUM_COMMUNITIES,
+    SBM_P_INTER,
+    SBM_P_INTRA,
+    STRENGTH_CAP,
+    STRENGTH_DELTA,
+    STRENGTH_FLOOR,
+    TOPIC_LABEL,
+    TOPIC_TEXT,
 )
 from network.discussion import run_discussion
 from network.edges import update_edge
 from network.logger import SimulationLogger
-from network.matching import compute_pairings, ensure_connectivity
+from network.matching import ensure_connectivity, select_responder
+from network.opinion import (
+    compute_polarization_metrics,
+    init_opinion_states,
+    opinion_states_to_dict,
+    softmax_opinion,
+    update_q_value,
+)
 from network.state import EdgeData, NetworkState
 
-# ── Topic schedule ──────────────────────────────────────────────────────────
-# Rounds are divided into equal blocks, one per topic in TOPICS insertion order.
-# The last topic absorbs any remainder when NETWORK_MAX_ROUNDS % len(TOPICS) != 0.
-_TOPIC_LABELS = list(TOPICS.keys())
-_BLOCK_SIZE   = NETWORK_MAX_ROUNDS // len(_TOPIC_LABELS)
 
-
-def _topic_for_round(round_n: int) -> tuple[str, str]:
-    """Return (label, text) for the given round number."""
-    idx = min((round_n - 1) // _BLOCK_SIZE, len(_TOPIC_LABELS) - 1)
-    label = _TOPIC_LABELS[idx]
-    return label, TOPICS[label]
+def _distribute_sizes(n: int, k: int) -> list[int]:
+    """Divide n agents as evenly as possible into k communities."""
+    base, remainder = divmod(n, k)
+    return [base + (1 if i < remainder else 0) for i in range(k)]
 
 
 def _build_initial_graph(agent_names: list[str]) -> nx.Graph:
-    """Create a Watts-Strogatz small-world graph over the agent name list.
+    """Create a Stochastic Block Model graph over the agent name list.
 
-    Nodes are relabelled from integers to agent names so that every edge
-    attribute and algorithm operates on human-readable identifiers.  Every
-    edge is initialised with a fresh ``EdgeData`` instance at the default
-    strength of 1.0.
+    Nodes are relabelled from integers to agent names.  Community membership
+    is stored as a node attribute ``"community"`` for post-hoc analysis.
+    Every edge is initialised with a fresh ``EdgeData`` instance at strength 1.0.
 
-    Parameters
-    ----------
-    agent_names:
-        Ordered list of unique agent names.  The graph will have exactly
-        ``len(agent_names)`` nodes.
-
-    Returns
-    -------
-    nx.Graph
-        A connected (or near-connected) small-world graph with ``"data"``
-        edge attributes.
+    ``SBM_P_INTER`` is the primary experimental variable: sweep it to reproduce
+    SFT's polarization-to-consensus phase transition.
     """
     n = len(agent_names)
-    G = nx.watts_strogatz_graph(n, k=INITIAL_GRAPH_K, p=INITIAL_GRAPH_P)
-    G = nx.relabel_nodes(G, {i: agent_names[i] for i in range(n)})
+    sizes = _distribute_sizes(n, SBM_NUM_COMMUNITIES)
+    p_matrix = [
+        [SBM_P_INTRA if i == j else SBM_P_INTER for j in range(SBM_NUM_COMMUNITIES)]
+        for i in range(SBM_NUM_COMMUNITIES)
+    ]
+
+    G_int = nx.stochastic_block_model(sizes, p_matrix)
+    G = nx.relabel_nodes(G_int, {i: agent_names[i] for i in range(n)})
+
+    offset = 0
+    for comm_idx, size in enumerate(sizes):
+        for i in range(offset, offset + size):
+            G.nodes[agent_names[i]]["community"] = comm_idx
+        offset += size
+
     for u, v in G.edges():
         G[u][v]["data"] = EdgeData(strengths={u: 1.0, v: 1.0})
+
     return G
 
 
@@ -124,66 +136,96 @@ def main() -> None:
     # ── Network initialisation ───────────────────────────────────────────
     G = _build_initial_graph(list(agents.keys()))
     state = NetworkState(agents=agents, graph=G, max_rounds=NETWORK_MAX_ROUNDS)
-
-    # EXTENSION POINT — Banisch opinion initialisation:
-    # from network.opinion import init_opinion_states
-    # state.opinion_states = init_opinion_states(agents, TOPIC)
+    state.opinion_states = init_opinion_states(list(agents.keys()))
 
     logger.snapshot_network(state)   # round-0 baseline
-    print(f"Initial graph: {G.number_of_nodes()} nodes, "
-          f"{G.number_of_edges()} edges "
-          f"(Watts-Strogatz k={INITIAL_GRAPH_K}, p={INITIAL_GRAPH_P})\n")
+
+    community_sizes = _distribute_sizes(NUM_AGENTS, SBM_NUM_COMMUNITIES)
+    print(
+        f"Initial graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges  "
+        f"(SBM: {SBM_NUM_COMMUNITIES} communities {community_sizes}, "
+        f"p_intra={SBM_P_INTRA}, p_inter={SBM_P_INTER})\n"
+        f"α={LEARNING_RATE}  β={OPINION_BETA}  h={HOMOPHILY_H}  "
+        f"interactions/round={INTERACTIONS_PER_ROUND}  dynamic={GRAPH_DYNAMIC}\n"
+    )
 
     # ── Main simulation loop ─────────────────────────────────────────────
     for round_n in range(1, NETWORK_MAX_ROUNDS + 1):
         state.round = round_n
-        topic_label, topic_text = _topic_for_round(round_n)
+
+        n_pos = sum(1 for s in state.opinion_states.values() if s.expressed_opinion == 1)
+        n_neg = NUM_AGENTS - n_pos
+
         print(f"\n{'━' * 60}")
-        print(f"Round {round_n} / {NETWORK_MAX_ROUNDS}  "
-              f"│  topic: {topic_label}  "
-              f"│  edges: {state.graph.number_of_edges()}  "
-              f"│  components: {nx.number_connected_components(state.graph)}")
-        if state.idle_agent:
-            print(f"  (sitting out: {state.idle_agent})")
+        print(
+            f"Round {round_n} / {NETWORK_MAX_ROUNDS}  "
+            f"│  topic: {TOPIC_LABEL}  "
+            f"│  edges: {state.graph.number_of_edges()}  "
+            f"│  opinions: +{n_pos} / −{n_neg}"
+        )
         print(f"{'━' * 60}")
 
-        pairings = compute_pairings(state)
+        # ── INTERACTIONS_PER_ROUND asymmetric interactions ───────────────
+        for interaction_i in range(INTERACTIONS_PER_ROUND):
 
-        for agent_a_name, agent_b_name in pairings:
-            print(f"\n  ▶ {agent_a_name} ↔ {agent_b_name}")
+            # 1. Draw expresser uniformly from agents with at least one neighbour
+            eligible = [n for n in agents if state.graph.degree(n) > 0]
+            if not eligible:
+                break
+            expresser_name = random.choice(eligible)
+
+            # 2. Draw responder with homophily bias h
+            neighbours = list(state.graph.neighbors(expresser_name))
+            responder_name = select_responder(
+                expresser_name, neighbours, state.opinion_states, HOMOPHILY_H
+            )
+
+            # 3. Draw expressed stances via softmax(β)
+            expressed_a = softmax_opinion(state.opinion_states[expresser_name], OPINION_BETA)
+            expressed_b = softmax_opinion(state.opinion_states[responder_name], OPINION_BETA)
+
+            print(f"\n  [{interaction_i + 1}/{INTERACTIONS_PER_ROUND}]  "
+                  f"{expresser_name} → {responder_name}  "
+                  f"(stances: {expressed_a:+d} / {expressed_b:+d})")
+
+            # 4. One exchange: expresser speaks, responder reacts
             result = run_discussion(
-                agents[agent_a_name],
-                agents[agent_b_name],
-                topic_text,
-                topic_label=topic_label,
+                agents[expresser_name],
+                agents[responder_name],
+                TOPIC_TEXT,
+                topic_label=TOPIC_LABEL,
+                turns_per_agent=1,
+                opinion_a=expressed_a,
+                opinion_b=expressed_b,
             )
-            logger.log_discussion(round_n, agent_a_name, agent_b_name, result)
+            logger.log_discussion(round_n, expresser_name, responder_name, result)
 
-            survived = update_edge(
-                state,
-                agent_a_name,
-                agent_b_name,
-                result["score_a"],
-                result["score_b"],
+            # 5. Q-update: expresser only
+            update_q_value(
+                state.opinion_states[expresser_name],
+                expressed_a,
+                result["reward_a"],
+                LEARNING_RATE,
             )
 
-            event_type = "edge_maintained" if survived else "edge_dropped"
-            logger.log_edge_event(round_n, event_type, agent_a_name, agent_b_name)
+            q = state.opinion_states[expresser_name]
+            print(f"    Q-gap {expresser_name}: {q.q_gap:+.3f} (modal→{q.expressed_opinion:+d})")
 
-            status = "✔ maintained" if survived else "✘ dropped"
-            if survived:
-                edge = state.graph[agent_a_name][agent_b_name]["data"]
-                str_a = edge.strengths[agent_a_name]
-                str_b = edge.strengths[agent_b_name]
-                strength_info = f"  |  strengths {str_a:.2f} / {str_b:.2f}"
-            else:
-                strength_info = ""
-            print(f"    {agent_a_name} {result['score_a']:+.2f}  |  "
-                  f"{agent_b_name} {result['score_b']:+.2f}"
-                  f"{strength_info}  |  edge {status}")
+            # 6. Edge dynamics (GRAPH_DYNAMIC only)
+            if GRAPH_DYNAMIC and state.graph.has_edge(expresser_name, responder_name):
+                survived = update_edge(
+                    state,
+                    expresser_name,
+                    responder_name,
+                    result["score_a"],
+                    result["score_b"],
+                )
+                event_type = "edge_maintained" if survived else "edge_dropped"
+                logger.log_edge_event(round_n, event_type, expresser_name, responder_name)
 
-        # ── Reconnect isolated agents ────────────────────────────────────
-        ensure_connectivity(state)
+        # ── Reconnect isolated agents (GRAPH_DYNAMIC only) ───────────────
+        if GRAPH_DYNAMIC:
+            ensure_connectivity(state)
 
         # ── Reflection phase ─────────────────────────────────────────────
         if round_n % REFLECT_EVERY == 0:
@@ -192,22 +234,27 @@ def main() -> None:
                 agent.reflect()
                 logger.log_reflection(round_n, agent.name)
 
-        # EXTENSION POINT — Banisch opinion update:
-        # Collect round_results = [result, ...] inside the pairings loop above,
-        # then pass them here along with the opinion states.
-        # from network.opinion import update_opinion_states, compute_metrics
-        # update_opinion_states(state.opinion_states, round_results, alpha=0.05)
-        # extra = compute_metrics(state.graph, state.opinion_states)
-        # logger.snapshot_network(state, extra_metrics=extra)
-
-        logger.snapshot_network(state)
+        # ── Snapshot ─────────────────────────────────────────────────────
+        pol_metrics = compute_polarization_metrics(state.opinion_states)
+        logger.snapshot_network(
+            state,
+            extra_metrics=pol_metrics,
+            opinion_states=opinion_states_to_dict(state.opinion_states),
+        )
 
     # ── Summary ──────────────────────────────────────────────────────────
     print(f"\n\n{'━' * 60}")
     print("Simulation complete")
     print(f"  Rounds run    : {NETWORK_MAX_ROUNDS}")
+    print(f"  Interactions  : {NETWORK_MAX_ROUNDS * INTERACTIONS_PER_ROUND}")
     print(f"  Final edges   : {state.graph.number_of_edges()}")
     print(f"  Components    : {nx.number_connected_components(state.graph)}")
+
+    final_pol = compute_polarization_metrics(state.opinion_states)
+    print(f"  Opinions +1   : {final_pol.get('n_pos', '?')}  /  "
+          f"Opinions −1: {final_pol.get('n_neg', '?')}")
+    print(f"  Dispersion    : {final_pol.get('dispersion', '?')}")
+    print(f"  Mean |Q-gap|  : {final_pol.get('mean_q_gap', '?')}")
     print(f"  Logs written  : {logger.run_dir}")
     print(f"{'━' * 60}\n")
 

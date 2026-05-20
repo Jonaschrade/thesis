@@ -2,15 +2,9 @@
 Data classes for the network simulation state.
 
 NetworkState is the single mutable object passed through every round of the
-simulation.  It holds the agent registry, the NetworkX graph, and round
-bookkeeping.  EdgeData is stored as a per-edge attribute under the key "data"
-on every edge of the graph.
-
-Extension point
----------------
-When adding Banisch & Olbrich (2019) opinion tracking, uncomment the
-``opinion_states`` field and populate it via ``network/opinion.py``.  No other
-file in this module needs to change.
+simulation.  It holds the agent registry, the NetworkX graph, agent Q-value
+opinion states, and round bookkeeping.  EdgeData is stored as a per-edge
+attribute under the key "data" on every edge of the graph.
 """
 
 from __future__ import annotations
@@ -63,15 +57,13 @@ class NetworkState:
         Total number of rounds to run.  The outer loop exits when
         ``round >= max_rounds``.
     idle_agent:
-        Name of the agent sitting out the current round when the total
-        agent count is odd.  ``None`` when the count is even.
-
-    Extension point
-    ---------------
-    Banisch opinion state — uncomment when ``network/opinion.py`` is added::
-
-        opinion_states: dict = field(default_factory=dict)
-        # maps agent name -> AgentOpinionState (q_pos, q_neg, public_opinion)
+        Name of the agent sitting out the current round when odd-count
+        symmetric pairing is used (``compute_pairings()``).  Always
+        ``None`` in the default asymmetric interaction mode.
+    opinion_states:
+        Mapping from agent name to ``AgentOpinionState`` (Q-values and
+        expressed opinion).  Populated by ``network/opinion.py`` at the
+        start of the simulation and updated after every discussion.
     """
 
     agents: dict
@@ -79,4 +71,5 @@ class NetworkState:
     round: int = 0
     max_rounds: int = 30
     idle_agent: str | None = None
-    # opinion_states: dict = field(default_factory=dict)
+    opinion_states: dict = field(default_factory=dict)
+    # maps agent name -> AgentOpinionState (q_pos, q_neg, expressed_opinion)
