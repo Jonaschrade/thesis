@@ -30,6 +30,9 @@ def select_responder(
 ) -> str:
     """Draw a responder from the expresser's neighbours with homophily bias h.
 
+    Called once per interaction in the main loop of ``main_network.py`` and
+    ``main_pairwise.py`` to implement the asymmetric SFT interaction rule.
+
     Implements the partner-selection mechanism from Jacob & Banisch (2023):
     interaction probability is weighted by conviction similarity, controlled
     by h.  Keeping this as a standalone function means the virtual-worlds
@@ -78,6 +81,10 @@ def select_responder(
 
 def compute_pairings(state: NetworkState) -> list[tuple[str, str]]:
     """Compute agent pairings for the current round.
+
+    Not called in the default asymmetric interaction mode.  Reserved for the
+    ``GRAPH_DYNAMIC = True`` extension if a symmetric global-matching round
+    structure is needed alongside endogenous tie rewiring.
 
     Agents are matched over their existing edges using a max-weight matching
     algorithm (Edmonds' blossom).  Agents left unmatched pause the round —
