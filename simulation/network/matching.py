@@ -16,9 +16,11 @@ from __future__ import annotations
 
 import math
 import random
+from collections import deque
 
 import networkx as nx
 
+from config import REWARD_WINDOW_M
 from network.state import EdgeData, NetworkState
 
 
@@ -148,7 +150,13 @@ def reconnect_isolated(state: NetworkState, agent_name: str) -> None:
         return
 
     partner = random.choice(candidates)
-    state.graph.add_edge(agent_name, partner, data=EdgeData(strengths={agent_name: 0.5, partner: 0.5}))
+    state.graph.add_edge(agent_name, partner, data=EdgeData(
+        strengths={agent_name: 0.5, partner: 0.5},
+        reward_history={
+            agent_name: deque(maxlen=REWARD_WINDOW_M),
+            partner:     deque(maxlen=REWARD_WINDOW_M),
+        },
+    ))
 
 
 def ensure_connectivity(state: NetworkState) -> None:

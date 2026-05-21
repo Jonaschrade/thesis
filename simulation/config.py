@@ -56,10 +56,12 @@ HOMOPHILY_H = 0.0
 NUM_AGENTS         = 4    # total agents in the network graph (pairwise mode always uses 2)
 NETWORK_MAX_ROUNDS = 3    # total snapshot rounds
 
-# Interactions per snapshot round.  One interaction = one asymmetric event
-# (expresser drawn uniformly, responder drawn with homophily bias h, expresser's
-# Q updated).  Default = NUM_AGENTS gives each agent one expected interaction
-# per round on average (random sequential update convention).
+# Interactions per snapshot round — applies to both network and pairwise modes.
+# One interaction = one asymmetric event (expresser drawn uniformly, responder
+# drawn with homophily bias h in network mode or as the sole other agent in
+# pairwise mode, expresser's Q updated).
+# Default = NUM_AGENTS gives each agent one expected interaction per round on
+# average in network mode (random sequential update convention).
 INTERACTIONS_PER_ROUND = NUM_AGENTS
 
 # Graph topology — Stochastic Block Model (SBM).
@@ -76,9 +78,10 @@ SBM_P_INTER         = 0.1  # between-community edge probability (sweep this for 
 GRAPH_DYNAMIC = False
 
 # Edge dynamics — only active when GRAPH_DYNAMIC = True.
-STRENGTH_CAP   = 3.0  # ceiling on each agent's internal edge valuation
-STRENGTH_FLOOR = 0.0  # edge removed when either agent's valuation falls to or below this
-STRENGTH_DELTA = 0.3  # valuation change per round = agent_score × STRENGTH_DELTA
+STRENGTH_CAP    = 3.0  # ceiling on each agent's internal edge valuation
+STRENGTH_FLOOR  = 0.0  # edge removed when either agent's valuation falls to or below this
+STRENGTH_DELTA  = 0.3  # valuation change per interaction = mean_reward × STRENGTH_DELTA
+REWARD_WINDOW_M = 5    # rolling window length (interactions) for reward-history edge evaluation
 
 # ── Discussion topic ─────────────────────────────────────────────────────────
 # The simulation runs on a single fixed topic for all rounds.  A single topic

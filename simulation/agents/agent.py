@@ -12,9 +12,11 @@ Public API:
         expression and evaluation do not share prompt context.
     agent.reflect()
         Synthesise insights from recent memories.
-    agent.evaluate(messages) -> dict
-        Full-transcript concordance score; used for edge dynamics when
-        GRAPH_DYNAMIC = True.
+    agent.evaluate(messages) -> dict  [LEGACY]
+        Full-transcript concordance score.  Previously used for edge
+        dynamics; superseded by the reward-history mechanism in
+        network/edges.py.  Retained in case the concordance-based
+        evaluation path is revisited.
 """
 
 import ollama as ol
@@ -210,21 +212,24 @@ class Agent:
     # evaluate ---------------------------------------------------------------
 
     def evaluate(self, messages: list[dict]) -> dict:
-        """Rate opinion concordance with the conversation partner on a continuous scale.
+        """[LEGACY] Rate opinion concordance with the conversation partner.
+
+        Previously drove edge valuation in ``network/edges.py`` via concordance
+        scores (score_a / score_b).  Superseded by the reward-history mechanism:
+        edge strength is now derived from the rolling mean of ``classify_reward``
+        outputs accumulated in ``EdgeData.reward_history``.
+
+        Retained here in case the concordance-based evaluation path is revisited.
+        Not called by any active simulation path.
 
         Implements the social feedback mechanism from Banisch & Olbrich (2019):
         the reward signal is determined exclusively by opinion concordance.
-        A positive score reflects agreement (reinforces the relationship); a
-        negative score reflects disagreement (weakens it).  General social
-        factors — politeness, conversational style, feeling heard — are
-        deliberately excluded.
-
-        The returned score is used by ``network/edges.py`` to adjust the
-        calling agent's internal edge valuation.  The edge is severed as soon
-        as either agent's valuation falls to or below ``STRENGTH_FLOOR``.
+        A positive score reflects agreement; a negative score reflects
+        disagreement.  General social factors — politeness, conversational style,
+        feeling heard — are deliberately excluded.
 
         Args:
-            messages: Current conversation history as a list of
+            messages: Conversation history as a list of
                       {"speaker": str, "content": str} dicts.
 
         Returns:

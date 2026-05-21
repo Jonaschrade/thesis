@@ -13,16 +13,24 @@ Mechanisms present
 - Asymmetric update: ``update_q_value()`` is called on the expresser only;
   the responder's Q-values are unchanged for that interaction.
 - Classifier reward: ``classify_reward()`` on the partner's last message
-  drives the Q-update.  ``evaluate()`` provides the full-transcript score.
+  drives both the Q-update and the strength update.
 - Reflection: every ``REFLECT_EVERY`` rounds.
+
+``INTERACTIONS_PER_ROUND`` controls the number of asymmetric interactions per
+round — the expresser is drawn uniformly at random each time (mirroring network
+mode).  With two agents the responder is always the other agent.
 
 Relationship strength (GRAPH_DYNAMIC = True)
 ---------------------------------------------
-When ``GRAPH_DYNAMIC`` is enabled, ``evaluate()`` scores also adjust per-agent
-relationship strength by ``score × STRENGTH_DELTA``.  The simulation ends
-early if either agent's strength reaches ``STRENGTH_FLOOR`` — the pairwise
-analogue of edge severance in network mode.  With ``GRAPH_DYNAMIC = False``
-(default), only Q-dynamics run and there is no early exit.
+When ``GRAPH_DYNAMIC`` is enabled, the expresser's ``reward_a`` adjusts the
+expresser's relationship strength by ``reward_a × STRENGTH_DELTA`` each
+interaction (asymmetric — only the expresser evaluates the channel).  The
+simulation ends early if either agent's strength reaches ``STRENGTH_FLOOR``.
+With ``GRAPH_DYNAMIC = False`` (default), only Q-dynamics run.
+
+Note: pairwise mode applies rewards directly per interaction rather than
+through a rolling window (no ``EdgeData``/deques).  For symmetric strength
+updates, pass ``reward_b`` for the responder — currently commented out.
 
 Note on homophily h
 -------------------
@@ -32,21 +40,22 @@ choice.
 
 Round structure
 ---------------
-For each round (2 asymmetric interactions: A→B, then B→A):
+For each round (INTERACTIONS_PER_ROUND asymmetric interactions; expresser drawn uniformly):
   For each interaction:
     1. Softmax draw    expressed = softmax(β) over expresser's Q-values
     2. Exchange        expresser speaks → responder reacts  (1 exchange)
-    3. Reward          classify_reward(responder's message) → r
-    4. Q-update        Q(expressed) ← (1−α)·Q(expressed) + α·r  [expresser only]
-    5. Evaluate        evaluate() → score_a/b  [always]
-    6. Strength        [GRAPH_DYNAMIC only] strength update; exit if ≤ STRENGTH_FLOOR
-  After both interactions:
-    7. Reflection      if round % REFLECT_EVERY == 0
+    3. Reward          classify_reward(responder's message) → reward_a
+    4. Q-update        Q(expressed) ← (1−α)·Q(expressed) + α·reward_a  [expresser only]
+    5. Strength        [GRAPH_DYNAMIC only] strength[expresser] += reward_a × STRENGTH_DELTA
+  After all interactions:
+    6. Reflection      if round % REFLECT_EVERY == 0
 
 Configuration
 -------------
 All tunable parameters live in ``config.py``.
 """
+
+import random
 
 from langchain_ollama import OllamaLLM
 
@@ -54,6 +63,7 @@ from agents.agent import Agent
 from agents.personas import sample_personas
 from config import (
     GRAPH_DYNAMIC,
+    INTERACTIONS_PER_ROUND,
     LEARNING_RATE,
     LLM_MODEL,
     NETWORK_MAX_ROUNDS,
@@ -107,6 +117,7 @@ def main() -> None:
     terminated_early = False
     for round_n in range(1, NETWORK_MAX_ROUNDS + 1):
         n_pos = sum(1 for s in opinion_states.values() if s.expressed_opinion == 1)
+        n_neg = len(agents) - n_pos
         strength_str = (
             f"  │  strengths: {a_name} {strength[a_name]:.2f} / {b_name} {strength[b_name]:.2f}"
             if GRAPH_DYNAMIC else ""
@@ -116,24 +127,27 @@ def main() -> None:
         print(
             f"Round {round_n} / {NETWORK_MAX_ROUNDS}  "
             f"│  topic: {TOPIC_LABEL}  "
-            f"│  opinions: +{n_pos} / −{2 - n_pos}"
+            f"│  opinions: +{n_pos} / −{n_neg}"
             f"{strength_str}"
         )
         print(f"{'━' * 50}")
 
-        # Two interactions per round: A→B, then B→A
-        for expresser, responder in [(agents[0], agents[1]), (agents[1], agents[0])]:
+        # INTERACTIONS_PER_ROUND asymmetric interactions; expresser drawn uniformly each time
+        for interaction_i in range(INTERACTIONS_PER_ROUND):
+            expresser = random.choice(agents)
+            responder = agents[1] if expresser is agents[0] else agents[0]
 
             # 1. Softmax draw
             expressed_a = softmax_opinion(opinion_states[expresser.name], OPINION_BETA)
             expressed_b = softmax_opinion(opinion_states[responder.name], OPINION_BETA)
 
             print(
-                f"\n  ▶ {expresser.name} → {responder.name}  "
+                f"\n  [{interaction_i + 1}/{INTERACTIONS_PER_ROUND}]  "
+                f"{expresser.name} → {responder.name}  "
                 f"(stances: {expressed_a:+d} / {expressed_b:+d})"
             )
 
-            # 2–5. Exchange, reward, Q-update, evaluate
+            # 2–4. Exchange, reward, Q-update
             result = run_discussion(
                 expresser,
                 responder,
@@ -159,16 +173,14 @@ def main() -> None:
                 f"(modal→{q.expressed_opinion:+d})"
             )
 
-            # 6. Strength update (GRAPH_DYNAMIC only)
+            # 5. Strength update (GRAPH_DYNAMIC only) — asymmetric: expresser only
             if GRAPH_DYNAMIC:
                 strength[expresser.name] = max(0.0, min(
                     STRENGTH_CAP,
-                    strength[expresser.name] + result["score_a"] * STRENGTH_DELTA,
+                    strength[expresser.name] + result["reward_a"] * STRENGTH_DELTA,
                 ))
-                strength[responder.name] = max(0.0, min(
-                    STRENGTH_CAP,
-                    strength[responder.name] + result["score_b"] * STRENGTH_DELTA,
-                ))
+                # strength[responder.name] unchanged (asymmetric mode)
+                # enable for symmetric: + result["reward_b"] * STRENGTH_DELTA
                 print(
                     f"    Strength  {expresser.name}: {strength[expresser.name]:.2f}  "
                     f"│  {responder.name}: {strength[responder.name]:.2f}"
@@ -192,6 +204,7 @@ def main() -> None:
     # ── Summary ──────────────────────────────────────────────────────────
     print(f"\n\n{'━' * 50}")
     print("Simulation complete")
+    print(f"  Interactions  : {NETWORK_MAX_ROUNDS * INTERACTIONS_PER_ROUND}")
 
     final_pol = compute_polarization_metrics(opinion_states)
     print(

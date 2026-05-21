@@ -31,7 +31,7 @@ where r ∈ {−1, +1} in the original binary formulation.
 | Opinion-conditioned response | `agents/agent.py` | `respond(..., expressed_opinion=None)` — optional stance anchor |
 | Discussion wiring | `network/discussion.py` | Passes `opinion_a/b` to `respond()`; calls `classify_reward()` after turns |
 | Main loop wiring (network) | `main_network.py` | asymmetric draw → `softmax_opinion(β)` → `run_discussion(turns=1)` → `update_q_value(expressed, …)` → snapshot |
-| Main loop wiring (pairwise) | `main_pairwise.py` | same SFT mechanisms; 2 fixed interactions/round (A→B, B→A); no graph or community |
+| Main loop wiring (pairwise) | `main_pairwise.py` | same SFT mechanisms; `INTERACTIONS_PER_ROUND` interactions/round (expresser drawn uniformly); no graph or community |
 | Homophily selection | `network/matching.py` | `select_responder(h)` — h=0 uniform, h>0 conviction-similarity weighted |
 
 ---
@@ -48,7 +48,7 @@ where r ∈ {−1, +1} in the original binary formulation.
 
 `classify_reward()` uses a minimal prompt: the partner's last message, no persona, no history. This means the reward is a clean function of what the partner said, not of what the scoring agent expected to hear.
 
-`evaluate()` is retained and still called after every discussion, but its score is used only for edge-weight updates when `GRAPH_DYNAMIC = True`.
+`evaluate()` is retained in the `Agent` class [legacy] but is no longer called by any active simulation path. Its role in edge dynamics has been superseded by the reward-history mechanism (`network/edges.py`): edge valuation now derives from the rolling mean of `classify_reward()` outputs accumulated in `EdgeData.reward_history`, eliminating a separate LLM concordance judgment per interaction.
 
 ### 2. Opinion initialisation: neutral, not LLM-bootstrapped
 
@@ -119,11 +119,12 @@ Every `round_NNNN.json` snapshot now contains:
 
 Setting `GRAPH_DYNAMIC = True` in `config.py` activates the homophilic tie-formation mechanism:
 
-- `evaluate()` scores update per-agent edge valuations via `update_edge()`
+- Each interaction appends `reward_a` to the expresser's rolling history deque on that edge (`EdgeData.reward_history`, window length `REWARD_WINDOW_M` from `config.py`)
+- The rolling mean of that history drives the expresser's valuation update via `update_edge()` (asymmetric — responder's side unchanged; enable symmetric mode by passing `reward_b` at the call site)
 - Edges are severed when either agent's valuation reaches `STRENGTH_FLOOR`
 - `ensure_connectivity()` reconnects isolated agents
 
-This corresponds to Jacob & Banisch's (2023) virtual-worlds setup where structural co-evolution is driven by the same reward signal as opinion learning. The known design risk is the graph crystallising before Q-values have time to diverge — keep `STRENGTH_DELTA` small relative to `LEARNING_RATE`.
+This corresponds to Jacob & Banisch's (2023) virtual-worlds setup where structural co-evolution is driven by the same reward signal as opinion learning — `classify_reward()` now serves dual duty: Q-value update and edge evaluation. Known design risks: (1) graph crystallising before Q-values diverge — keep `STRENGTH_DELTA` small relative to `LEARNING_RATE`; (2) premature edge drops before the history window fills — cold-start signal defaults to 0.0 (neutral).
 
 ---
 

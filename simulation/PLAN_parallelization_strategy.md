@@ -11,15 +11,15 @@ The simulation is currently fully sequential: within each round, pairs are proce
 ```
 Per discussion (2 agents, DISCUSSION_TURNS=5 exchanges):
   respond() calls  : 5 × 2 = 10 LLM calls
-  evaluate() calls :         2 LLM calls
-  Total            :        12 LLM calls × 17.5 s avg = 210 s ≈ 3.5 min
+  evaluate() calls :         0 LLM calls  (removed — edge eval now uses reward history)
+  Total            :        10 LLM calls × 17.5 s avg = 175 s ≈ 2.9 min
 
 Per round (50 pairs, N=100):
-  Discussions      : 50 × 210 s = 10 500 s ≈ 2.9 hours  (sequential)
+  Discussions      : 50 × 175 s = 8 750 s ≈ 2.4 hours  (sequential)
   Reflections      : (every 2nd round) 100 agents × ~4 LLM calls × 17.5 s = 7 000 s ≈ 1.9 hours total
   Snapshots/logging: < 1 s                               (negligible)
 
-Total sequential   : 20 rounds × 2.9 h + 10 reflect rounds × 1.9 h ÷ 10 ≈ 63 hours
+Total sequential   : 20 rounds × 2.4 h + 10 reflect rounds × 1.9 h ÷ 10 ≈ 51 hours
 ```
 
 ---
@@ -29,9 +29,10 @@ Total sequential   : 20 rounds × 2.9 h + 10 reflect rounds × 1.9 h ÷ 10 ≈ 6
 | Opportunity | Independence | Leverage |
 |---|---|---|
 | **Discussions across pairs** | Fully independent (separate agent memory stores, separate edges) | Very high — 50× in theory |
-| **`evaluate()` within a discussion** | Both agents see the same completed transcript, no shared writes | 2× per discussion |
 | **Reflections across agents** | Each agent's memory store is isolated | Up to 100× |
 | **Turns within a discussion** | Strictly sequential (B's turn depends on A's reply) | Not parallelisable |
+
+Note: `evaluate()` was previously listed as a 2× parallelism opportunity within each discussion. It has been removed from `run_discussion()` — edge evaluation now uses `classify_reward()` outputs accumulated in `EdgeData.reward_history`, saving 2 LLM calls per interaction without any parallelism work required.
 
 ---
 
@@ -68,11 +69,10 @@ Both phases are additive. Phase 1 can be deployed immediately; Phase 2 requires 
 ```
 config.py           — add MAX_DISCUSSION_WORKERS, MAX_REFLECT_WORKERS
 network/logger.py   — add threading.Lock to _write()
-network/discussion.py — parallelize the two evaluate() calls within each discussion
 main_network.py     — wrap pair loop in ThreadPoolExecutor; parallelize reflection phase
 ```
 
-No changes to `agents/`, `memory/`, `network/edges.py`, `network/matching.py`, `network/state.py`.
+No changes to `agents/`, `memory/`, `network/discussion.py`, `network/edges.py`, `network/matching.py`, `network/state.py`.
 
 ---
 
@@ -115,58 +115,9 @@ No other method needs changes: `log_discussion`, `log_edge_event`, `log_reflecti
 
 ---
 
-### `network/discussion.py` — parallel evaluate()
+### `network/discussion.py` — no intra-discussion parallelism needed
 
-The two `evaluate()` calls are independent: both agents receive the same completed transcript and write only to their own memory-less evaluation logic (no `_store` call inside `evaluate()`). They can execute concurrently.
-
-```python
-from __future__ import annotations
-
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
-from agents.agent import Agent
-from config import DISCUSSION_TURNS
-
-
-def run_discussion(
-    agent_a: Agent,
-    agent_b: Agent,
-    topic: str,
-    topic_label: str = "",
-    turns_per_agent: int = DISCUSSION_TURNS,
-    verbose: bool = True,
-) -> dict:
-    """Run a pairwise discussion; both evaluate() calls run concurrently."""
-    transcript: list[dict] = [{"speaker": "Moderator", "content": topic}]
-    total_turns = turns_per_agent * 2
-
-    for i in range(total_turns):
-        speaker = agent_a if i % 2 == 0 else agent_b
-        last = transcript[-1]
-        reply = speaker.respond(last["content"], last["speaker"])
-        if verbose:
-            print(f"\n{speaker.name}: {reply}")
-        transcript.append({"speaker": speaker.name, "content": reply})
-
-    convo = transcript[1:]
-
-    # Both evaluate() calls are read-only on the transcript and write only to
-    # their own agent's memory-less scoring — safe to run concurrently.
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        fut_a = pool.submit(agent_a.evaluate, convo)
-        fut_b = pool.submit(agent_b.evaluate, convo)
-        eval_a = fut_a.result()
-        eval_b = fut_b.result()
-
-    return {
-        "topic_label": topic_label,
-        "turns":       convo,
-        "score_a":     eval_a["score"],
-        "reason_a":    eval_a["reason"],
-        "score_b":     eval_b["score"],
-        "reason_b":    eval_b["reason"],
-    }
-```
+`evaluate()` has been removed from `run_discussion()`. The only per-discussion parallelism opportunity that remains is the two `classify_reward()` calls — these are independent and could run concurrently, but each is a single short LLM call and the gain is minimal compared to the inter-discussion parallelism below. No changes to `discussion.py` are required for Phase 1.
 
 ---
 
@@ -213,7 +164,8 @@ for round_n in range(1, NETWORK_MAX_ROUNDS + 1):
 
         survived = update_edge(
             state, agent_a_name, agent_b_name,
-            result["score_a"], result["score_b"],
+            reward_a=result["reward_a"],
+            # reward_b=result["reward_b"],  # enable for symmetric mode
         )
         event_type = "edge_maintained" if survived else "edge_dropped"
         logger.log_edge_event(round_n, event_type, agent_a_name, agent_b_name)
@@ -227,7 +179,7 @@ for round_n in range(1, NETWORK_MAX_ROUNDS + 1):
         else:
             strength_info = ""
         print(f"  ▶ {agent_a_name} ↔ {agent_b_name}  "
-              f"{result['score_a']:+.2f} / {result['score_b']:+.2f}"
+              f"reward_a={result['reward_a']:+.2f}"
               f"{strength_info}  |  edge {status}")
 
     ensure_connectivity(state)
@@ -384,12 +336,14 @@ Configuration: N=100, DISCUSSION_TURNS=5, NETWORK_MAX_ROUNDS=20, REFLECT_EVERY=2
 
 | Phase | Backend | Workers | Concurrency | Est. runtime |
 |---|---|---|---|---|
-| Baseline (sequential) | Ollama 14b | 1 | 1 | ~63 hours |
-| Phase 1 only | Ollama 14b | 4 | ~2 effective | ~25–30 hours |
-| Phase 1 only | Ollama 7b | 6 | ~3 effective | ~18–22 hours |
-| Phase 1 + 2 | vLLM 14b Q4 | 4 | 4 batched | ~16 hours |
-| Phase 1 + 2 | vLLM 7b | 10 | 8–10 batched | **4–6 hours** |
+| Baseline (sequential) | Ollama 14b | 1 | 1 | ~51 hours |
+| Phase 1 only | Ollama 14b | 4 | ~2 effective | ~20–25 hours |
+| Phase 1 only | Ollama 7b | 6 | ~3 effective | ~15–18 hours |
+| Phase 1 + 2 | vLLM 14b Q4 | 4 | 4 batched | ~13 hours |
+| Phase 1 + 2 | vLLM 7b | 10 | 8–10 batched | **3–5 hours** |
 | Phase 1 + 2 | vLLM 3b | 20 | 12–15 batched | **2–3 hours** |
+
+Note: estimates updated for 10 LLM calls/discussion (was 12 — `evaluate()` removed).
 
 The 7b model is the practical target: 4–6 hours is feasible for overnight runs; quality is sufficient for concordance detection on clear opinion statements.
 
@@ -399,12 +353,11 @@ The 7b model is the practical target: 4–6 hours is feasible for overnight runs
 
 1. `config.py` — add parallelism constants (Phase 1)
 2. `network/logger.py` — add `threading.Lock` (Phase 1, required before any parallel writes)
-3. `network/discussion.py` — parallel `evaluate()` (Phase 1)
-4. `main_network.py` — parallel pair loop and reflection (Phase 1)
-5. Smoke test: `NUM_AGENTS=4, NETWORK_MAX_ROUNDS=3` — verify output identical to sequential
-6. `config.py` — add vLLM constants (Phase 2)
-7. `agents/agent.py` — add `_llm_invoke()` and vLLM client (Phase 2)
-8. Start vLLM server, set `LLM_BACKEND="vllm"`, rerun smoke test
+3. `main_network.py` — parallel pair loop and reflection (Phase 1)
+4. Smoke test: `NUM_AGENTS=4, NETWORK_MAX_ROUNDS=3` — verify output identical to sequential
+5. `config.py` — add vLLM constants (Phase 2)
+6. `agents/agent.py` — add `_llm_invoke()` and vLLM client (Phase 2)
+7. Start vLLM server, set `LLM_BACKEND="vllm"`, rerun smoke test
 
 ---
 

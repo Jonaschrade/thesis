@@ -34,6 +34,7 @@ All tunable parameters live in ``config.py``.
 """
 
 import random
+from collections import deque
 
 import networkx as nx
 from langchain_ollama import OllamaLLM
@@ -51,6 +52,7 @@ from config import (
     OLLAMA_HOST,
     OPINION_BETA,
     REFLECT_EVERY,
+    REWARD_WINDOW_M,
     SBM_NUM_COMMUNITIES,
     SBM_P_INTER,
     SBM_P_INTRA,
@@ -107,7 +109,13 @@ def _build_initial_graph(agent_names: list[str]) -> nx.Graph:
         offset += size
 
     for u, v in G.edges():
-        G[u][v]["data"] = EdgeData(strengths={u: 1.0, v: 1.0})
+        G[u][v]["data"] = EdgeData(
+            strengths={u: 1.0, v: 1.0},
+            reward_history={
+                u: deque(maxlen=REWARD_WINDOW_M),
+                v: deque(maxlen=REWARD_WINDOW_M),
+            },
+        )
 
     return G
 
@@ -217,8 +225,8 @@ def main() -> None:
                     state,
                     expresser_name,
                     responder_name,
-                    result["score_a"],
-                    result["score_b"],
+                    reward_a=result["reward_a"],
+                    # reward_b=result["reward_b"],  # enable for symmetric mode
                 )
                 event_type = "edge_maintained" if survived else "edge_dropped"
                 logger.log_edge_event(round_n, event_type, expresser_name, responder_name)

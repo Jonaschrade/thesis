@@ -33,14 +33,14 @@ No LangGraph. No OpenAI. Local Ollama only (`qwen2.5:14b` + `nomic-embed-text`).
 
 ```
 config.py               single source of truth for all constants
-agents/agent.py         Agent class — respond(), classify_reward(), reflect(), evaluate()
+agents/agent.py         Agent class — respond(), classify_reward(), reflect(); evaluate() [legacy]
 agents/personas.py      samples survey records, expands to name+persona via LLM
 memory/store.py         per-agent ChromaDB collection
 memory/scoring.py       composite score: 0.3·recency + 0.3·importance + 0.4·relevance
 network/opinion.py      SFT Q-value state — AgentOpinionState, softmax_opinion(), update_q_value(), metrics
 network/state.py        NetworkState, EdgeData dataclasses
 network/matching.py     select_responder() — homophily-weighted partner draw; also compute_pairings(), ensure_connectivity()
-network/discussion.py   run_discussion() — exchange loop + classify_reward() + evaluate()
+network/discussion.py   run_discussion() — exchange loop + classify_reward()
 network/edges.py        update_edge() — active only when GRAPH_DYNAMIC = True
 network/logger.py       SimulationLogger — events.jsonl + round_NNNN.json snapshots
 main_network.py         network entry point
@@ -78,21 +78,19 @@ The persona and memory condition LLM text generation only. The Q-update rule see
 5. Reward             classify_reward(responder's last message) → r ∈ [−1, +1]
                       minimal prompt, no persona/transcript context
 6. Q-update           Q(expressed) ← (1−α)·Q(expressed) + α·r  [expresser only]
-7. Evaluate           evaluate() called on full transcript → score_a/b  [always]
-8. Edge update        update_edge(score_a, score_b)  [GRAPH_DYNAMIC only]
+7. Edge update        update_edge(reward_a)  [GRAPH_DYNAMIC only]
+                      appends r to edge's rolling history (window REWARD_WINDOW_M);
+                      signal = mean(history) drives strength update
 ```
 
 ### Two reward signals
 
-`classify_reward()` and `evaluate()` serve different purposes and must not be merged:
-
 | Signal | Source | Used for |
 |---|---|---|
-| `reward_a` | `classify_reward()` on responder's last message | Q-value TD update — expresser only (both modes) |
-| `reward_b` | `classify_reward()` on expresser's last message | discarded — responder's Q does not update (both modes) |
-| `score_a/b` | `evaluate()` on full transcript | Edge valuation (`GRAPH_DYNAMIC` network mode); strength update (pairwise `GRAPH_DYNAMIC`); otherwise discarded |
+| `reward_a` | `classify_reward()` on responder's last message | Q-value TD update (expresser only); edge-history evaluation in network mode (`GRAPH_DYNAMIC`); strength update in pairwise mode |
+| `reward_b` | `classify_reward()` on expresser's last message | Available for symmetric edge/strength extension; not used in any active update path |
 
-`classify_reward()` uses a minimal prompt — no persona, no history — so that expression and reward remain causally independent. `run_discussion()` always computes all four signals; each caller discards what it does not need.
+`classify_reward()` uses a minimal prompt — no persona, no history — so that expression and reward remain as causally independent as possible. `run_discussion()` computes both signals; `reward_b` is available for a future symmetric extension.
 
 ---
 
@@ -102,7 +100,7 @@ The persona and memory condition LLM text generation only. The Q-update rule see
 
 Retrieves up to `MAX_MEMORIES_RETRIEVE` relevant memories, optionally anchors to an SFT stance (`expressed_opinion`: +1 or −1), and generates a position-taking reply. The full interaction is stored as a new memory.
 
-**Do not soften the position-taking instruction.** A legible stance is required for `classify_reward()` and `evaluate()` to detect agreement/disagreement reliably.
+**Do not soften the position-taking instruction.** A legible stance is required for `classify_reward()` to detect agreement/disagreement reliably.
 
 ### `classify_reward(reaction_text) -> float`
 
@@ -112,15 +110,13 @@ Rates a single reaction text in [−1.0, 1.0] using a minimal prompt with no per
 
 Two-step: generate 2 reflection questions from the most recent `MAX_MEMORIES_SEED` memories → synthesise 1 insight per question. Stores insights as high-importance `"reflection"` memories. Triggered every `REFLECT_EVERY` rounds.
 
-### `evaluate(messages) -> {"agent", "score", "reason"}`
+### `evaluate(messages) -> {"agent", "score", "reason"}` [legacy]
 
-Rates the full transcript exclusively on opinion concordance, returning a score in [−1.0, 1.0] with a one-sentence explanation. Called after every interaction in both modes; what the caller does with `score` differs:
+Rates the full transcript exclusively on opinion concordance, returning a score in [−1.0, 1.0] with a one-sentence explanation. Previously drove edge valuation in `GRAPH_DYNAMIC` mode; superseded by the reward-history mechanism in `network/edges.py`, which derives the edge signal from the rolling mean of `classify_reward()` outputs.
 
-- **`GRAPH_DYNAMIC = False`** (default, both modes) — score is computed but discarded.
-- **`GRAPH_DYNAMIC = True`, network mode** — score adjusts the agent's edge valuation via `update_edge()`.
-- **`GRAPH_DYNAMIC = True`, pairwise mode** — score adjusts per-agent relationship strength; the conversation ends early if either strength reaches `STRENGTH_FLOOR`.
+Not called by any active simulation path. Retained in the `Agent` class in case the concordance-based evaluation path is revisited.
 
-Output format: `BEWERTUNG: <float>` + `MEINUNGSABGLEICH: <sentence>`. Parser keys on these prefixes — do not rename them.
+Output format: `BEWERTUNG: <float>` + `MEINUNGSABGLEICH: <sentence>`.
 
 ---
 
@@ -151,12 +147,13 @@ For each round (= INTERACTIONS_PER_ROUND events):
     4. Exchange         expresser speaks → responder reacts  (1 exchange each)
     5. Reward           classify_reward(responder's message) → reward_a
     6. Q-update         Q(expressed_a) ← (1−α)·Q(expressed_a) + α·reward_a
-    7. Evaluate         evaluate() → score_a/b  [always]
-    8. Edge update      update_edge(score_a, score_b)  [GRAPH_DYNAMIC only]
+    7. Edge update      update_edge(reward_a)  [GRAPH_DYNAMIC only]
+                        appends reward_a to edge's rolling history window;
+                        signal = mean(history[-REWARD_WINDOW_M:])
   After all interactions:
-    9. Reconnect        [GRAPH_DYNAMIC only] degree-0 agents reconnected
-   10. Reflection       if round % REFLECT_EVERY == 0: all agents reflect
-   11. Snapshot         Q-trajectories + polarization metrics → logs/
+    8. Reconnect        [GRAPH_DYNAMIC only] degree-0 agents reconnected
+    9. Reflection       if round % REFLECT_EVERY == 0: all agents reflect
+   10. Snapshot         Q-trajectories + polarization metrics → logs/
 ```
 
 ### Initial topology — Stochastic Block Model
@@ -192,7 +189,7 @@ logs/run_<timestamp>/
 
 | `type` | Key fields |
 |---|---|
-| `discussion` | `round`, `agent_a` (expresser), `agent_b` (responder), `topic_label`, `turns`, `reward_a`, `reward_b`, `score_a`, `reason_a`, `score_b`, `reason_b` |
+| `discussion` | `round`, `agent_a` (expresser), `agent_b` (responder), `topic_label`, `turns`, `reward_a`, `reward_b` |
 | `edge_maintained` | `round`, `agent_a`, `agent_b` |
 | `edge_dropped` | `round`, `agent_a`, `agent_b` |
 | `edge_added` | `round`, `agent_a`, `agent_b` |
@@ -228,24 +225,23 @@ logs/run_<timestamp>/
 
 ## Pairwise mode
 
-Runs the identical SFT mechanisms as network mode for exactly two agents with no graph. Each round consists of two asymmetric interactions — A expresses to B, then B expresses to A — giving each agent one Q-value update per round.
+Runs the identical SFT mechanisms as network mode for exactly two agents with no graph. Each round consists of `INTERACTIONS_PER_ROUND` asymmetric interactions, with the expresser drawn uniformly at random each time (with two agents, the responder is always the other agent).
 
 **What is absent:** SBM graph, community structure. Homophily parameter `h` has no effect (only one possible responder).
 
 ### Round structure
 
 ```
-For each round (2 asymmetric interactions: A→B, then B→A):
+For each round (INTERACTIONS_PER_ROUND asymmetric interactions; expresser drawn uniformly):
   For each interaction:
     1. Softmax draw    expressed = softmax(β) over expresser's Q-values
     2. Exchange        expresser speaks → responder reacts  (1 exchange)
-    3. Reward          classify_reward(responder's message) → r
-    4. Q-update        Q(expressed) ← (1−α)·Q(expressed) + α·r  [expresser only]
-    5. Evaluate        evaluate() → score_a/b  [always]
-    6. Strength        [GRAPH_DYNAMIC only] score_a/b → strength update;
+    3. Reward          classify_reward(responder's message) → reward_a
+    4. Q-update        Q(expressed) ← (1−α)·Q(expressed) + α·reward_a  [expresser only]
+    5. Strength        [GRAPH_DYNAMIC only] reward_a → strength[expresser] update;
                        exit if either strength ≤ STRENGTH_FLOOR
-  After both interactions:
-    7. Reflection      if round % REFLECT_EVERY == 0
+  After all interactions:
+    6. Reflection      if round % REFLECT_EVERY == 0
 ```
 
 ---
@@ -294,7 +290,7 @@ NETWORK_MAX_ROUNDS     = 3
 INTERACTIONS_PER_ROUND = 4  # = NUM_AGENTS
 ```
 
-Both entry points use these values. Pairwise always runs 2 interactions per round (one per agent) regardless of `INTERACTIONS_PER_ROUND`.
+Both entry points use these values, including `INTERACTIONS_PER_ROUND`.
 
 On startup, personas are sampled from `data/german_personas.json` (5 246 German citizen survey records). The LLM generates a realistic German first name and 2–3 sentence persona description from each record's demographic and attitudinal attributes. All agent prompts and responses run in German.
 
@@ -315,7 +311,8 @@ On startup, personas are sampled from `data/german_personas.json` (5 246 German 
 | `MEMORY_PERSIST` | `False` | Persist ChromaDB to disk |
 | `STRENGTH_CAP` | `3.0` | Ceiling on per-agent strength/edge valuation |
 | `STRENGTH_FLOOR` | `0.0` | Termination threshold: conversation/edge ends when either agent's value ≤ this |
-| `STRENGTH_DELTA` | `0.3` | Strength change per round/interaction = score × STRENGTH_DELTA |
+| `STRENGTH_DELTA` | `0.3` | Strength change per interaction = mean_reward × STRENGTH_DELTA |
+| `INTERACTIONS_PER_ROUND` | `= NUM_AGENTS` | Asymmetric interactions per snapshot round — applies to both modes; expresser drawn uniformly each time |
 
 ### SFT Q-learning (network mode only)
 
@@ -330,7 +327,6 @@ On startup, personas are sampled from `data/german_personas.json` (5 246 German 
 | Setting | Default | Description |
 |---|---|---|
 | `NUM_AGENTS` | `4` | Agents in the network graph |
-| `INTERACTIONS_PER_ROUND` | `= NUM_AGENTS` | Asymmetric interactions per round; default gives one expected interaction per agent |
 | `SBM_NUM_COMMUNITIES` | `2` | Number of blocks in the SBM graph |
 | `SBM_P_INTRA` | `0.7` | Within-community edge probability |
 | `SBM_P_INTER` | `0.1` | Between-community edge probability — **sweep this for the phase transition** |
@@ -340,6 +336,7 @@ On startup, personas are sampled from `data/german_personas.json` (5 246 German 
 | Setting | Default | Description |
 |---|---|---|
 | `GRAPH_DYNAMIC` | `False` | Enable endogenous tie rewiring via edge valuations |
+| `REWARD_WINDOW_M` | `5` | Rolling window length (interactions) for reward-history edge evaluation |
 
 ### Topic
 
@@ -362,7 +359,7 @@ A single fixed topic is required for Q-value coherence: the +1/−1 stance dimen
 
 **Q-update consistency** — `update_q_value()` takes the *actual drawn stance* (`expressed`) as an explicit parameter, not the modal argmax. Always pass the value returned by `softmax_opinion()` for that interaction.
 
-**Edge drop rule** — threshold-based: edge is severed when *either* agent's valuation falls to or below `STRENGTH_FLOOR`. Active only when `GRAPH_DYNAMIC = True`.
+**Edge drop rule** — threshold-based: edge is severed when *either* agent's valuation falls to or below `STRENGTH_FLOOR`. Valuation is updated from the rolling mean of the agent's `reward_a` history on that edge (window `REWARD_WINDOW_M`). Active only when `GRAPH_DYNAMIC = True`.
 
 **`select_responder`** — the partner-selection function is kept as a standalone swappable unit. The virtual-worlds multi-platform extension (Jacob & Banisch 2023) slots in here by replacing the neighbour set, not by changing the main loop.
 
@@ -373,7 +370,7 @@ A single fixed topic is required for Q-value coherence: the +1/−1 stance dimen
 - `classify_reward()` prompt — minimal context is deliberate; adding persona/transcript context re-couples expression and evaluation
 - `respond()` position-taking instruction — a legible stance is required for reward detection to work
 - `memory/scoring.py` weights (0.3/0.3/0.4) — tuned composite retrieval
-- The `BEWERTUNG` / `MEINUNGSABGLEICH` output labels in `evaluate()` — parsed by prefix match
+- The `BEWERTUNG` / `MEINUNGSABGLEICH` output labels in `evaluate()` — parsed by prefix match (applies if `evaluate()` is reinstated)
 - `LEARNING_RATE` and `OPINION_BETA` together govern the convergence rate — change them together and re-run the phase-transition baseline
 
 ---
@@ -382,11 +379,11 @@ A single fixed topic is required for Q-value coherence: the +1/−1 stance dimen
 
 The main experiments hold the graph fixed (`GRAPH_DYNAMIC = False`) to isolate opinion dynamics from structural dynamics. The extension chapter activates tie rewiring by setting `GRAPH_DYNAMIC = True`:
 
-- After each interaction, `evaluate()` scores adjust each agent's edge valuation via `update_edge()`.
+- After each interaction, `reward_a` is appended to the expresser's rolling history deque on that edge (`EdgeData.reward_history`, window `REWARD_WINDOW_M`). The rolling mean drives the expresser's strength update via `update_edge()`.
 - Edges are severed when either agent's valuation reaches `STRENGTH_FLOOR`.
 - Isolated agents are reconnected via `ensure_connectivity()`.
 
-The known failure mode is the network crystallising before Q-values have diverged — keep `STRENGTH_DELTA` small relative to `LEARNING_RATE`.
+Known failure modes: (1) the graph crystallising before Q-values diverge — keep `STRENGTH_DELTA` small relative to `LEARNING_RATE`; (2) premature edge drops before the history window fills — cold-start signal defaults to 0.0 (neutral) until `REWARD_WINDOW_M` interactions have accumulated on that edge.
 
 The further extension toward the full Jacob & Banisch (2023) virtual-worlds model (parallel real-world / virtual-worlds networks with login probability λ) is out of scope for the main experiments. It slots in by replacing the neighbour set passed to `select_responder()`.
 

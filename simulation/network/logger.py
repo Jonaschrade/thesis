@@ -114,8 +114,8 @@ class SimulationLogger:
             Name of the second participant.
         result:
             The dict returned by ``network.discussion.run_discussion``.
-            Keys ``transcript``, ``topic_label``, ``score_a``, ``reason_a``,
-            ``score_b``, ``reason_b`` are included verbatim.
+            Keys ``topic_label``, ``turns``, ``reward_a``, ``reward_b``
+            are included verbatim.
         """
         self._write({
             "type":    "discussion",

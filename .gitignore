@@ -5,3 +5,4 @@ __pycache__/
 .env
 myvenv/
 *.json
+expose-latex/

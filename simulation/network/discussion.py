@@ -1,21 +1,21 @@
 """
 Pairwise discussion runner for the network simulation.
 
-A single discussion consists of ``DISCUSSION_TURNS`` alternating LLM calls
-between two agents.  Two reward signals are then computed:
+A single discussion consists of alternating LLM calls between two agents,
+followed by reward classification.  The reward signal drives two mechanisms:
 
-* ``reward_a`` / ``reward_b`` — scalar rewards derived by each agent
-  calling ``classify_reward()`` on the *partner's* last message.  These
-  drive the SFT Q-value TD update and are structurally independent of the
-  agents' own response generation.
+* **Q-value update** — ``reward_a`` is used for the expresser's SFT TD update
+  (``reward_b`` is computed but currently unused in the Q-update, which is
+  asymmetric by design).
 
-* ``score_a`` / ``score_b`` — full-transcript concordance scores from
-  ``evaluate()``.  These are used only when ``GRAPH_DYNAMIC = True`` to
-  adjust each agent's internal edge valuation.
+* **Edge evaluation** — when ``GRAPH_DYNAMIC = True``, ``reward_a`` is
+  recorded in the edge's rolling reward history and drives the expresser's
+  internal valuation of the channel (see ``network/edges.py``).  In the
+  current asymmetric implementation only ``reward_a`` is passed to
+  ``update_edge``; ``reward_b`` is available for a future symmetric extension.
 
-Keeping the two signals separate preserves the causal chain required for
-the SFT interpretability claim: Q-value trajectories are driven by the
-classifier, not by the agents' self-assessment.
+The classifier reward is kept causally separate from ``respond()`` (no shared
+prompt context) to avoid self-scoring contamination (Chuang et al. 2024).
 """
 
 from __future__ import annotations
@@ -40,14 +40,11 @@ def run_discussion(
     Each agent's ``respond()`` call is conditioned on their SFT expressed
     opinion (``opinion_a`` / ``opinion_b``) when provided.
 
-    After the last turn, two independent reward signals are computed:
+    After the last turn, classifier rewards are computed:
 
-    1. **Classifier reward** — each agent calls ``classify_reward()`` on the
-       *partner's* last message.  No persona or full-transcript context is
-       used, keeping generation and evaluation causally separate.
-
-    2. **Evaluate score** — each agent calls ``evaluate()`` on the full
-       transcript.  Retained for edge-dynamics mode (``GRAPH_DYNAMIC = True``).
+    * **Classifier reward** — each agent calls ``classify_reward()`` on the
+      *partner's* last message.  No persona or full-transcript context is
+      used, keeping generation and evaluation causally separate.
 
     Parameters
     ----------
@@ -78,18 +75,10 @@ def run_discussion(
             dicts, excluding the moderator opening.
         ``reward_a`` : float
             Classifier reward for agent_a from agent_b's last reaction ∈ [−1, 1].
-            Used for agent_a's Q-value TD update.
+            Drives agent_a's Q-value TD update and edge valuation (asymmetric mode).
         ``reward_b`` : float
             Classifier reward for agent_b from agent_a's last reaction ∈ [−1, 1].
-        ``score_a`` : float
-            Full-transcript concordance score from agent_a ∈ [−1, 1].
-            Used for edge-dynamics when GRAPH_DYNAMIC = True.
-        ``reason_a`` : str
-            One-sentence concordance description from agent_a.
-        ``score_b`` : float
-            Full-transcript concordance score from agent_b.
-        ``reason_b`` : str
-            One-sentence concordance description from agent_b.
+            Available for a future symmetric edge-evaluation extension.
         ``topic_label`` : str
             The label passed in via ``topic_label``.
     """
@@ -110,7 +99,7 @@ def run_discussion(
             print(f"\n{speaker.name}: {reply}")
         transcript.append({"speaker": speaker.name, "content": reply})
 
-    # Exclude the moderator opening before evaluate() and reward extraction
+    # Exclude the moderator opening from reward extraction
     convo = transcript[1:]
 
     # Classifier reward: each agent classifies the partner's last message.
@@ -126,17 +115,9 @@ def run_discussion(
 
     print(f"\n  🎯 Reward  {agent_a.name}: {reward_a:+.2f}  |  {agent_b.name}: {reward_b:+.2f}")
 
-    # Full-transcript evaluation for edge-dynamics mode
-    eval_a = agent_a.evaluate(convo)
-    eval_b = agent_b.evaluate(convo)
-
     return {
         "topic_label": topic_label,
         "turns":       convo,
         "reward_a":    reward_a,
         "reward_b":    reward_b,
-        "score_a":     eval_a["score"],
-        "reason_a":    eval_a["reason"],
-        "score_b":     eval_b["score"],
-        "reason_b":    eval_b["reason"],
     }

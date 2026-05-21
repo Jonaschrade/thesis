@@ -22,18 +22,25 @@ class EdgeData:
     ----------
     strengths:
         Per-agent internal valuation of the relationship, keyed by agent
-        name.  Each agent's value is updated independently after each
-        discussion by their own concordance score × ``STRENGTH_DELTA``.
-        The edge is severed as soon as *either* agent's value falls to or
-        below ``STRENGTH_FLOOR``.  The matching weight is the sum of both
-        values so that well-established (mutually valued) relationships are
-        preferred in pairing.
+        name.  Updated each interaction from the mean of that agent's
+        reward history × ``STRENGTH_DELTA``.  The edge is severed as soon
+        as *either* agent's value falls to or below ``STRENGTH_FLOOR``.
+        The matching weight is the sum of both values so that
+        well-established (mutually valued) relationships are preferred.
+    reward_history:
+        Rolling reward window per agent, keyed by agent name.  Each value
+        is a ``collections.deque`` with ``maxlen=REWARD_WINDOW_M``.
+        Initialised with deques at graph construction; updated by
+        ``network/edges.py`` after each interaction.  In asymmetric mode
+        only the expresser's deque is populated; the responder's remains
+        empty and contributes a neutral signal of 0.0.
     rounds_active:
         Counter incremented after every discussion in which the edge
         survives.  Useful for post-hoc analysis of relationship duration.
     """
 
-    strengths: dict = field(default_factory=dict)  # {agent_name: float}
+    strengths: dict = field(default_factory=dict)       # {agent_name: float}
+    reward_history: dict = field(default_factory=dict)  # {agent_name: deque[float]}
     rounds_active: int = 0
 
 
