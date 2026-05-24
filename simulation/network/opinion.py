@@ -8,20 +8,29 @@ that Q-value after each interaction using a temporal-difference rule.
 
 Public API
 ----------
-AgentOpinionState             dataclass: Q-values + argmax modal opinion
+AgentOpinionState             dataclass: Q-values + preferred_opinion (argmax) + q_gap
 init_opinion_states()         initialise one state per agent
 softmax_opinion()             stochastic expression draw (β-parameterised)
 update_q_value()              apply TD update given the expressed stance
-opinion_states_to_dict()      serialise for logging
+opinion_states_to_dict()      serialise for logging (preferred + optional expressed)
 compute_polarization_metrics()  population-level SFT metrics
+
+Terminology note
+----------------
+``preferred_opinion``  — deterministic argmax over Q-values; the stance the
+                         agent *would prefer* given its current Q-values.
+                         Used for metrics, logging, and console output.
+``expressed opinion``  — the stance *actually drawn* by ``softmax_opinion()``
+                         in a specific interaction.  Can differ from the
+                         preferred opinion when conviction (q_gap) is low.
+Both are recorded in the per-round snapshot; only the expressed stance drives
+the Q-value TD update.
 """
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-
-import networkx as nx
 
 
 @dataclass
@@ -45,13 +54,15 @@ class AgentOpinionState:
     q_neg: float = 0.0
 
     @property
-    def expressed_opinion(self) -> int:
-        """Modal opinion: argmax over Q-values; ties resolve in favour of +1.
+    def preferred_opinion(self) -> int:
+        """Preferred opinion: argmax over Q-values; ties resolve in favour of +1.
 
         This is the deterministic indicator used for metrics and logging.
-        The actual stance expressed in any given interaction is drawn
-        stochastically by ``softmax_opinion()`` — it may differ from this
-        property when the agent's conviction (q_gap) is low.
+        It reflects the stance the agent *would prefer* given its current
+        Q-values, but is not necessarily the stance expressed in any given
+        interaction.  The actual expressed stance is drawn stochastically by
+        ``softmax_opinion()`` and can differ from this property when
+        conviction (q_gap) is low.
         """
         return 1 if self.q_pos >= self.q_neg else -1
 
@@ -135,17 +146,34 @@ def softmax_opinion(opinion: AgentOpinionState, beta: float) -> int:
 
 def opinion_states_to_dict(
     opinion_states: dict[str, AgentOpinionState],
+    expressed_stances: dict[str, int] | None = None,
 ) -> dict[str, dict]:
-    """Serialise opinion states for JSON logging."""
-    return {
-        name: {
-            "q_pos":    round(s.q_pos, 4),
-            "q_neg":    round(s.q_neg, 4),
-            "expressed": s.expressed_opinion,
-            "q_gap":    round(s.q_gap, 4),
+    """Serialise opinion states for JSON logging.
+
+    Parameters
+    ----------
+    opinion_states:
+        Mapping of agent name to AgentOpinionState.
+    expressed_stances:
+        Optional mapping of agent name to the actual softmax-drawn stance for
+        the current round.  When provided, each agent entry gains an
+        ``"expressed"`` key with the interaction-level draw alongside the
+        deterministic ``"preferred"`` (argmax) indicator.  Agents absent from
+        this dict (e.g. never selected as expresser in the round) receive no
+        ``"expressed"`` key in their entry.
+    """
+    result = {}
+    for name, s in opinion_states.items():
+        entry: dict = {
+            "q_pos":     round(s.q_pos, 4),
+            "q_neg":     round(s.q_neg, 4),
+            "preferred": s.preferred_opinion,
         }
-        for name, s in opinion_states.items()
-    }
+        if expressed_stances is not None and name in expressed_stances:
+            entry["expressed"] = expressed_stances[name]
+        entry["q_gap"] = round(s.q_gap, 4)
+        result[name] = entry
+    return result
 
 
 def compute_polarization_metrics(
@@ -162,20 +190,20 @@ def compute_polarization_metrics(
     -------
     dict with keys:
         n_pos : int
-            Agents currently expressing opinion +1.
+            Agents whose preferred opinion is +1 (argmax).
         n_neg : int
-            Agents currently expressing opinion −1.
+            Agents whose preferred opinion is −1 (argmax).
         dispersion : float
-            Variance of expressed opinions in {−1, +1}.  Ranges from 0
+            Variance of preferred opinions in {−1, +1}.  Ranges from 0
             (full consensus) to 1 (maximally split population).
         mean_q_gap : float
             Mean |Q(+1) − Q(−1)| across agents — average certainty of
-            expressed stance.  High values indicate committed opinions.
+            preferred stance.  High values indicate committed opinions.
     """
     if not opinion_states:
         return {}
 
-    opinions = [s.expressed_opinion for s in opinion_states.values()]
+    opinions = [s.preferred_opinion for s in opinion_states.values()]
     n = len(opinions)
     n_pos = sum(1 for o in opinions if o == 1)
     n_neg = n - n_pos

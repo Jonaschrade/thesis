@@ -79,4 +79,4 @@ class NetworkState:
     max_rounds: int = 30
     idle_agent: str | None = None
     opinion_states: dict = field(default_factory=dict)
-    # maps agent name -> AgentOpinionState (q_pos, q_neg, expressed_opinion)
+    # maps agent name -> AgentOpinionState (q_pos, q_neg, preferred_opinion)

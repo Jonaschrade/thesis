@@ -116,7 +116,7 @@ def main() -> None:
     # ── Main simulation loop ─────────────────────────────────────────────
     terminated_early = False
     for round_n in range(1, NETWORK_MAX_ROUNDS + 1):
-        n_pos = sum(1 for s in opinion_states.values() if s.expressed_opinion == 1)
+        n_pos = sum(1 for s in opinion_states.values() if s.preferred_opinion == 1)
         n_neg = len(agents) - n_pos
         strength_str = (
             f"  │  strengths: {a_name} {strength[a_name]:.2f} / {b_name} {strength[b_name]:.2f}"
@@ -157,6 +157,8 @@ def main() -> None:
                 opinion_a=expressed_a,
                 opinion_b=expressed_b,
             )
+            result["preferred_a"] = opinion_states[expresser.name].preferred_opinion
+            result["preferred_b"] = opinion_states[responder.name].preferred_opinion
             logger.log_discussion(round_n, expresser.name, responder.name, result)
 
             # 4. Q-update: expresser only
@@ -170,7 +172,7 @@ def main() -> None:
             q = opinion_states[expresser.name]
             print(
                 f"    Q-gap {expresser.name}: {q.q_gap:+.3f} "
-                f"(modal→{q.expressed_opinion:+d})"
+                f"(expressed→{expressed_a:+d}, preferred→{q.preferred_opinion:+d})"
             )
 
             # 5. Strength update (GRAPH_DYNAMIC only) — asymmetric: expresser only

@@ -161,7 +161,7 @@ def main() -> None:
     for round_n in range(1, NETWORK_MAX_ROUNDS + 1):
         state.round = round_n
 
-        n_pos = sum(1 for s in state.opinion_states.values() if s.expressed_opinion == 1)
+        n_pos = sum(1 for s in state.opinion_states.values() if s.preferred_opinion == 1)
         n_neg = NUM_AGENTS - n_pos
 
         print(f"\n{'━' * 60}")
@@ -174,6 +174,7 @@ def main() -> None:
         print(f"{'━' * 60}")
 
         # ── INTERACTIONS_PER_ROUND asymmetric interactions ───────────────
+        expressed_stances: dict[str, int] = {}  # last expressed stance per agent this round
         for interaction_i in range(INTERACTIONS_PER_ROUND):
 
             # 1. Draw expresser uniformly from agents with at least one neighbour
@@ -206,6 +207,8 @@ def main() -> None:
                 opinion_a=expressed_a,
                 opinion_b=expressed_b,
             )
+            result["preferred_a"] = state.opinion_states[expresser_name].preferred_opinion
+            result["preferred_b"] = state.opinion_states[responder_name].preferred_opinion
             logger.log_discussion(round_n, expresser_name, responder_name, result)
 
             # 5. Q-update: expresser only
@@ -215,9 +218,13 @@ def main() -> None:
                 result["reward_a"],
                 LEARNING_RATE,
             )
+            expressed_stances[expresser_name] = expressed_a
 
             q = state.opinion_states[expresser_name]
-            print(f"    Q-gap {expresser_name}: {q.q_gap:+.3f} (modal→{q.expressed_opinion:+d})")
+            print(
+                f"    Q-gap {expresser_name}: {q.q_gap:+.3f} "
+                f"(expressed→{expressed_a:+d}, preferred→{q.preferred_opinion:+d})"
+            )
 
             # 6. Edge dynamics (GRAPH_DYNAMIC only)
             if GRAPH_DYNAMIC and state.graph.has_edge(expresser_name, responder_name):
@@ -247,7 +254,7 @@ def main() -> None:
         logger.snapshot_network(
             state,
             extra_metrics=pol_metrics,
-            opinion_states=opinion_states_to_dict(state.opinion_states),
+            opinion_states=opinion_states_to_dict(state.opinion_states, expressed_stances),
         )
 
     # ── Summary ──────────────────────────────────────────────────────────

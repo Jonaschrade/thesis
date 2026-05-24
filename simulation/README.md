@@ -59,7 +59,7 @@ The Q-update rule lives entirely in code. The LLM handles three functions per in
 
 Each agent holds:
 
-- **`AgentOpinionState`** (`network/opinion.py`) — Q-values `q_pos` (Q(+1)) and `q_neg` (Q(−1)), representing accumulated social value of each stance. The **modal opinion** (`expressed_opinion` property) is `argmax(q_pos, q_neg)` and is used for metrics and logging. The **actual expressed stance** in each interaction is drawn stochastically by `softmax_opinion(β)` — at low conviction (q_gap near 0) the two can differ.
+- **`AgentOpinionState`** (`network/opinion.py`) — Q-values `q_pos` (Q(+1)) and `q_neg` (Q(−1)), representing accumulated social value of each stance. The **preferred opinion** (`preferred_opinion` property) is `argmax(q_pos, q_neg)` — the stance the agent *would prefer* based on accumulated Q-values — and is used for metrics and logging. The **actual expressed stance** in each interaction is drawn stochastically by `softmax_opinion(β)` — at low conviction (q_gap near 0) the two can differ. Both are recorded in the per-round snapshot under `"preferred"` and `"expressed"` keys respectively.
 - **Memory** — a ChromaDB collection of past interactions and reflections, used to condition `respond()`.
 - **Persona** — a German-language profile from survey data, injected into every LLM prompt.
 
@@ -189,7 +189,7 @@ logs/run_<timestamp>/
 
 | `type` | Key fields |
 |---|---|
-| `discussion` | `round`, `agent_a` (expresser), `agent_b` (responder), `topic_label`, `turns`, `reward_a`, `reward_b` |
+| `discussion` | `round`, `agent_a` (expresser), `agent_b` (responder), `topic_label`, `turns`, `reward_a`, `reward_b`, `expressed_a` (softmax draw for agent_a), `expressed_b` (softmax draw for agent_b), `preferred_a` (argmax for agent_a pre-update), `preferred_b` (argmax for agent_b pre-update) |
 | `edge_maintained` | `round`, `agent_a`, `agent_b` |
 | `edge_dropped` | `round`, `agent_a`, `agent_b` |
 | `edge_added` | `round`, `agent_a`, `agent_b` |
@@ -214,12 +214,12 @@ logs/run_<timestamp>/
     "mean_q_gap": 0.12
   },
   "opinion_states": {
-    "Anna": {"q_pos": 0.18, "q_neg": 0.04, "expressed": 1, "q_gap": 0.14}
+    "Anna": {"q_pos": 0.18, "q_neg": 0.04, "preferred": 1, "expressed": 1, "q_gap": 0.14}
   }
 }
 ```
 
-`opinion_states` records the Q-trajectory for every agent after every round, enabling the interpretability check: testing whether Q-gap trajectories predict observed opinion switches.
+`opinion_states` records the Q-trajectory for every agent after every round, enabling the interpretability check: testing whether Q-gap trajectories predict observed opinion switches.  `"preferred"` is the deterministic argmax; `"expressed"` is the actual softmax-drawn stance from the last interaction in which the agent was expresser (absent if the agent was never expresser in that round).
 
 ---
 
@@ -250,7 +250,7 @@ For each round (INTERACTIONS_PER_ROUND asymmetric interactions; expresser drawn 
 
 | Banisch & Olbrich (2019) concept | This simulation |
 |---|---|
-| Public opinion o_i ∈ {−1, +1} | Drawn by `softmax_opinion(β)`; modal indicator is `argmax(q_pos, q_neg)` |
+| Public opinion o_i ∈ {−1, +1} | Drawn by `softmax_opinion(β)`; deterministic preferred indicator is `preferred_opinion` = `argmax(q_pos, q_neg)` |
 | Social reward r = o_i · o_j ∈ {−1, +1} | `classify_reward()` output ∈ [−1.0, 1.0] — continuous, preserves ambivalence |
 | Q-value update Q(o_i) ← (1−α)·Q(o_i) + α·r | `update_q_value(expressed, reward, α)` — expresser only, per interaction |
 | Asymmetric one-directional update | One expresser drawn per event; only their Q updates (Jacob & Banisch 2023) |

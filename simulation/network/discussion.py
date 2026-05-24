@@ -38,7 +38,9 @@ def run_discussion(
     The discussion begins with a moderator message containing ``topic``.
     Agents then alternate for ``turns_per_agent × 2`` total LLM turns.
     Each agent's ``respond()`` call is conditioned on their SFT expressed
-    opinion (``opinion_a`` / ``opinion_b``) when provided.
+    opinion (``opinion_a`` / ``opinion_b``) when provided — these are the
+    actual softmax-drawn stances for this interaction, distinct from the
+    deterministic ``preferred_opinion`` (argmax) tracked on ``AgentOpinionState``.
 
     After the last turn, classifier rewards are computed:
 
@@ -62,10 +64,11 @@ def run_discussion(
     verbose:
         When ``True``, each reply is printed to stdout.
     opinion_a:
-        SFT expressed opinion for agent_a (+1 or −1).  Passed to
-        ``respond()`` to anchor the agent's stance.  None disables anchoring.
+        Actual expressed stance for agent_a (+1 or −1), drawn by
+        ``softmax_opinion()`` in the caller.  Passed to ``respond()`` to
+        anchor the agent's utterance.  None disables anchoring.
     opinion_b:
-        SFT expressed opinion for agent_b.  Same semantics as ``opinion_a``.
+        Actual expressed stance for agent_b.  Same semantics as ``opinion_a``.
 
     Returns
     -------
@@ -79,6 +82,13 @@ def run_discussion(
         ``reward_b`` : float
             Classifier reward for agent_b from agent_a's last reaction ∈ [−1, 1].
             Available for a future symmetric edge-evaluation extension.
+        ``expressed_a`` : int or None
+            The actual softmax-drawn stance for agent_a (+1 or −1) passed in
+            via ``opinion_a``.  Included verbatim so callers and the logger
+            can record the expressed stance alongside the preferred (argmax)
+            indicator.  Absent from the dict when ``opinion_a`` is None.
+        ``expressed_b`` : int or None
+            Same as ``expressed_a`` for agent_b.
         ``topic_label`` : str
             The label passed in via ``topic_label``.
     """
@@ -115,9 +125,14 @@ def run_discussion(
 
     print(f"\n  🎯 Reward  {agent_a.name}: {reward_a:+.2f}  |  {agent_b.name}: {reward_b:+.2f}")
 
-    return {
+    result: dict = {
         "topic_label": topic_label,
         "turns":       convo,
         "reward_a":    reward_a,
         "reward_b":    reward_b,
     }
+    if opinion_a is not None:
+        result["expressed_a"] = opinion_a
+    if opinion_b is not None:
+        result["expressed_b"] = opinion_b
+    return result

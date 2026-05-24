@@ -6,7 +6,7 @@ This document records the design decisions made when implementing the SFT Q-valu
 
 ## Theoretical background
 
-Banisch & Olbrich (2019) model opinion dynamics as a Q-learning process. Each agent holds two private Q-values — `q_pos` and `q_neg` — representing how rewarding it has been to express a pro or contra stance in past interactions. The expressed opinion is `argmax(q_pos, q_neg)`. After each interaction the Q-value for the expressed stance is updated toward the social reward received:
+Banisch & Olbrich (2019) model opinion dynamics as a Q-learning process. Each agent holds two private Q-values — `q_pos` and `q_neg` — representing how rewarding it has been to express a pro or contra stance in past interactions. The *preferred* opinion is `argmax(q_pos, q_neg)` — the deterministic indicator of which stance the agent currently favours; the *expressed* opinion in any given interaction is drawn stochastically by softmax with inverse temperature β and may differ from the preferred opinion when conviction is low. After each interaction the Q-value for the expressed (softmax-drawn) stance is updated toward the social reward received:
 
 ```
 Q(o_i) ← (1 − α) · Q(o_i) + α · r
@@ -20,7 +20,7 @@ where r ∈ {−1, +1} in the original binary formulation.
 
 | Component | File | Notes |
 |---|---|---|
-| `AgentOpinionState` dataclass | `network/opinion.py` | `q_pos`, `q_neg`; `expressed_opinion` property (argmax); `q_gap` property |
+| `AgentOpinionState` dataclass | `network/opinion.py` | `q_pos`, `q_neg`; `preferred_opinion` property (argmax — stance preferred given current Q-values, not necessarily the stance expressed in a given interaction); `q_gap` property |
 | `init_opinion_states()` | `network/opinion.py` | Initialises all agents at Q = (0, 0); no LLM call at startup |
 | `update_q_value(expressed, reward, α)` | `network/opinion.py` | TD update for the Q-value of the *actual drawn stance* (`expressed` passed explicitly) |
 | `softmax_opinion(β)` | `network/opinion.py` | Stochastic draw: β=0 → 50/50; β→∞ → argmax; uses logistic form |
@@ -105,13 +105,22 @@ Every `round_NNNN.json` snapshot now contains:
     "mean_q_gap": 0.12
   },
   "opinion_states": {
-    "Anna": {"q_pos": 0.18, "q_neg": 0.04, "expressed": 1, "q_gap": 0.14},
-    "Ben":  {"q_pos": -0.02, "q_neg": 0.11, "expressed": -1, "q_gap": -0.13}
+    "Anna": {"q_pos": 0.18, "q_neg": 0.04, "preferred": 1, "expressed": 1, "q_gap": 0.14},
+    "Ben":  {"q_pos": -0.02, "q_neg": 0.11, "preferred": -1, "expressed": -1, "q_gap": -0.13}
   }
 }
 ```
 
-`opinion_states` records the full Q-trajectory for every agent, enabling the interpretability check: regressing Q-gap trajectories against observed opinion switches to test whether the SFT layer genuinely governs the LLM's expressed positions.
+`opinion_states` records the full Q-trajectory for every agent, enabling the interpretability check: regressing Q-gap trajectories against observed opinion switches to test whether the SFT layer genuinely governs the LLM's expressed positions.  `"preferred"` is the deterministic argmax (`preferred_opinion` property); `"expressed"` is the actual softmax-drawn stance from the agent's last interaction as expresser in the round (absent if not selected as expresser).
+
+Each `discussion` record in `events.jsonl` also carries all four stance fields for the expresser (a) and responder (b):
+
+| Field | Meaning |
+|---|---|
+| `expressed_a` / `expressed_b` | Actual softmax-drawn stances for this interaction |
+| `preferred_a` / `preferred_b` | Deterministic argmax (pre-Q-update) going into this interaction |
+
+This allows per-interaction analysis without cross-referencing the round snapshot.
 
 ---
 
