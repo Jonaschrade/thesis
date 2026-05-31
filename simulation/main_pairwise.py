@@ -111,6 +111,9 @@ def main() -> None:
     # ── Relationship strength (GRAPH_DYNAMIC only) ───────────────────────
     strength = {a_name: 1.0, b_name: 1.0}
 
+    # last message each agent sent to a specific partner, keyed by (speaker, listener)
+    last_message_to: dict[tuple[str, str], str] = {}
+
     print(f"β={OPINION_BETA}  α={LEARNING_RATE}  dynamic={GRAPH_DYNAMIC}\n")
 
     # ── Main simulation loop ─────────────────────────────────────────────
@@ -156,7 +159,13 @@ def main() -> None:
                 turns_per_agent=1,
                 opinion_a=expressed_a,
                 opinion_b=expressed_b,
+                prior_b_message=last_message_to.get((responder.name, expresser.name)),
             )
+
+            # record each agent's last utterance so future exchanges can continue from it
+            for turn in result["turns"]:
+                other = responder.name if turn["speaker"] == expresser.name else expresser.name
+                last_message_to[(turn["speaker"], other)] = turn["content"]
             result["preferred_a"] = opinion_states[expresser.name].preferred_opinion
             result["preferred_b"] = opinion_states[responder.name].preferred_opinion
             logger.log_discussion(round_n, expresser.name, responder.name, result)

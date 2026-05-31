@@ -74,7 +74,11 @@ The persona and memory condition LLM text generation only. The Q-update rule see
 3. Express            softmax(β) draw over Q-values → expressed stance (+1 or −1)
                       β=0 → 50/50; β→∞ → deterministic argmax
 4. Exchange           1 exchange: expresser speaks (anchored to expressed stance),
-                                   responder reacts (anchored to their own stance)
+                                   responder reacts (anchored to their own stance).
+                                   On the first meeting the expresser responds to the
+                                   moderator's topic; on repeat meetings it responds to
+                                   the partner's last message, continuing the dialogue.
+                                   The topic is always in the stance hint.
 5. Reward             classify_reward(responder's last message) → r ∈ [−1, +1]
                       minimal prompt, no persona/transcript context
 6. Q-update           Q(expressed) ← (1−α)·Q(expressed) + α·r  [expresser only]
@@ -96,9 +100,9 @@ The persona and memory condition LLM text generation only. The Q-update rule see
 
 ## Agent primitives
 
-### `respond(message, speaker, expressed_opinion=None) -> str`
+### `respond(message, speaker, expressed_opinion=None, topic=None) -> str`
 
-Retrieves up to `MAX_MEMORIES_RETRIEVE` relevant memories, optionally anchors to an SFT stance (`expressed_opinion`: +1 or −1), and generates a position-taking reply. The full interaction is stored as a new memory.
+Retrieves up to `MAX_MEMORIES_RETRIEVE` relevant memories, optionally anchors to an SFT stance (`expressed_opinion`: +1 or −1), and generates a position-taking reply. When `topic` is provided it is embedded in the stance hint so the agent remains oriented to the discussion question regardless of whether the immediately preceding message was the moderator's opening or a partner's continuation. The full interaction is stored as a new memory.
 
 **Do not soften the position-taking instruction.** A legible stance is required for `classify_reward()` to detect agreement/disagreement reliably.
 
@@ -145,6 +149,9 @@ For each round (= INTERACTIONS_PER_ROUND events):
     2. Draw responder   select_responder(h) from expresser's neighbours
     3. Softmax draw     expressed_a = softmax(β) over expresser's Q-values
     4. Exchange         expresser speaks → responder reacts  (1 exchange each)
+                        First meeting: expresser responds to moderator's topic.
+                        Repeat meeting: expresser responds to partner's last message
+                        (continuation); topic always present in stance hint.
     5. Reward           classify_reward(responder's message) → reward_a
     6. Q-update         Q(expressed_a) ← (1−α)·Q(expressed_a) + α·reward_a
     7. Edge update      update_edge(reward_a)  [GRAPH_DYNAMIC only]
@@ -236,6 +243,9 @@ For each round (INTERACTIONS_PER_ROUND asymmetric interactions; expresser drawn 
   For each interaction:
     1. Softmax draw    expressed = softmax(β) over expresser's Q-values
     2. Exchange        expresser speaks → responder reacts  (1 exchange)
+                       First meeting: expresser responds to moderator's topic.
+                       Repeat meeting: expresser responds to partner's last message
+                       (continuation); topic always present in stance hint.
     3. Reward          classify_reward(responder's message) → reward_a
     4. Q-update        Q(expressed) ← (1−α)·Q(expressed) + α·reward_a  [expresser only]
     5. Strength        [GRAPH_DYNAMIC only] reward_a → strength[expresser] update;

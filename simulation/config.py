@@ -90,6 +90,5 @@ REWARD_WINDOW_M = 5    # rolling window length (interactions) for reward-history
 # semantic interpretation.
 TOPIC_LABEL = "Migrationspolitik"
 TOPIC_TEXT  = (
-    "Deutschland sollte die Zuwanderung von Nicht-EU-Ausländern "
-    "dauerhaft und stark begrenzen."
+    "Deutschland sollte die Zuwanderung von Nicht-EU-Ausländern dauerhaft und stark begrenzen."
 )

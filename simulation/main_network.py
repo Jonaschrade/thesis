@@ -112,7 +112,7 @@ def _build_initial_graph(agent_names: list[str]) -> nx.Graph:
         G[u][v]["data"] = EdgeData(
             strengths={u: 1.0, v: 1.0},
             reward_history={
-                u: deque(maxlen=REWARD_WINDOW_M),
+                u: deque(maxlen= REWARD_WINDOW_M),
                 v: deque(maxlen=REWARD_WINDOW_M),
             },
         )
@@ -156,6 +156,9 @@ def main() -> None:
         f"α={LEARNING_RATE}  β={OPINION_BETA}  h={HOMOPHILY_H}  "
         f"interactions/round={INTERACTIONS_PER_ROUND}  dynamic={GRAPH_DYNAMIC}\n"
     )
+
+    # last message each agent sent to a specific partner, keyed by (speaker, listener)
+    last_message_to: dict[tuple[str, str], str] = {}
 
     # ── Main simulation loop ─────────────────────────────────────────────
     for round_n in range(1, NETWORK_MAX_ROUNDS + 1):
@@ -206,7 +209,13 @@ def main() -> None:
                 turns_per_agent=1,
                 opinion_a=expressed_a,
                 opinion_b=expressed_b,
+                prior_b_message=last_message_to.get((responder_name, expresser_name)),
             )
+
+            # record each agent's last utterance so future exchanges can continue from it
+            for turn in result["turns"]:
+                other = responder_name if turn["speaker"] == expresser_name else expresser_name
+                last_message_to[(turn["speaker"], other)] = turn["content"]
             result["preferred_a"] = state.opinion_states[expresser_name].preferred_opinion
             result["preferred_b"] = state.opinion_states[responder_name].preferred_opinion
             logger.log_discussion(round_n, expresser_name, responder_name, result)

@@ -127,6 +127,7 @@ class Agent:
         message: str,
         speaker: str,
         expressed_opinion: int | None = None,
+        topic: str | None = None,
     ) -> str:
         """Generate a response to message from speaker.
 
@@ -141,6 +142,9 @@ class Agent:
             speaker:           Name of the agent or moderator who sent the message.
             expressed_opinion: SFT stance to anchor on: +1 (pro) or −1 (contra).
                                None disables anchoring (backward-compatible default).
+            topic:             The discussion topic text, injected into the stance
+                               hint so agents remain oriented after the moderator
+                               opening has left the immediate context window.
 
         Returns:
             The agent's reply as a plain string.
@@ -151,14 +155,16 @@ class Agent:
             if mems else "(noch keine)"
         )
 
+        topic_line = f"Thema: \"{topic}\"\n" if topic else ""
         if expressed_opinion is not None:
-            stance_label = "Ja" if expressed_opinion == 1 else "Nein"
+            stance_label = "Dafür" if expressed_opinion == 1 else "Dagegen"
             stance_hint = (
-                f"Deine aktuelle Haltung zur diskutierten Frage lautet: {stance_label}. "
+                f"{topic_line}"
+                f"Deine aktuelle Haltung zu diesem Thema lautet: {stance_label}. "
                 f"Formuliere deine Antwort ausgehend von dieser Überzeugung.\n\n"
             )
         else:
-            stance_hint = ""
+            stance_hint = f"{topic_line}\n" if topic_line else ""
 
         response = self.llm.invoke(
             f"Du bist {self.name}. {self.persona}\n\n"

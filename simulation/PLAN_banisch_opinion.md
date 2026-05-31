@@ -28,10 +28,10 @@ where r ∈ {−1, +1} in the original binary formulation.
 | `opinion_states_to_dict()` | `network/opinion.py` | Serialises Q-trajectories for JSON logging |
 | `opinion_states` field | `network/state.py` | `dict[str, AgentOpinionState]` on `NetworkState` |
 | Reward classification | `agents/agent.py` | `classify_reward(reaction_text)` — new separate method |
-| Opinion-conditioned response | `agents/agent.py` | `respond(..., expressed_opinion=None)` — optional stance anchor |
-| Discussion wiring | `network/discussion.py` | Passes `opinion_a/b` to `respond()`; calls `classify_reward()` after turns |
-| Main loop wiring (network) | `main_network.py` | asymmetric draw → `softmax_opinion(β)` → `run_discussion(turns=1)` → `update_q_value(expressed, …)` → snapshot |
-| Main loop wiring (pairwise) | `main_pairwise.py` | same SFT mechanisms; `INTERACTIONS_PER_ROUND` interactions/round (expresser drawn uniformly); no graph or community |
+| Opinion-conditioned response | `agents/agent.py` | `respond(..., expressed_opinion=None, topic=None)` — optional stance anchor; `topic` embedded in stance hint so agents remain oriented on repeat meetings |
+| Discussion wiring | `network/discussion.py` | Passes `opinion_a/b` and `topic` to every `respond()` call; accepts `prior_b_message` — when set, agent_a continues from agent_b's last message rather than the moderator's opening; calls `classify_reward()` after turns |
+| Main loop wiring (network) | `main_network.py` | asymmetric draw → `softmax_opinion(β)` → `run_discussion(turns=1, prior_b_message=…)` → `update_q_value(expressed, …)` → snapshot; `last_message_to[(speaker, listener)]` tracks the last utterance each agent sent to each partner so repeat meetings continue the dialogue |
+| Main loop wiring (pairwise) | `main_pairwise.py` | same SFT mechanisms; `INTERACTIONS_PER_ROUND` interactions/round (expresser drawn uniformly); no graph or community; same `last_message_to` continuation tracking |
 | Homophily selection | `network/matching.py` | `select_responder(h)` — h=0 uniform, h>0 conviction-similarity weighted |
 
 ---
@@ -69,6 +69,8 @@ The original plan did not specify a graph topology change. The implementation sw
 **Actual implementation:** each interaction draws one expresser uniformly at random, one responder from the expresser's neighbourhood, runs one exchange (`turns_per_agent=1`), and updates only the expresser's Q-value.
 
 **Why:** Jacob & Banisch (2023) establish that the one-directional update is what produces the asymmetric social-feedback dynamics: agents shift their opinion based on the reaction they receive when speaking, not when listening. The symmetric bilateral update obscures this directionality and changes the phase-transition behaviour. Using `turns_per_agent=1` in `run_discussion()` matches the single-exchange base unit of the model; `INTERACTIONS_PER_ROUND` (default = `NUM_AGENTS`) defines how many such events constitute a snapshot round.
+
+On the first meeting between a pair, the expresser responds to the moderator's opening (`TOPIC_TEXT`). On all subsequent meetings, the expresser responds to the partner's last message from the previous exchange, making repeated interactions a continuous dialogue rather than independent topic-seeded conversations. The topic text is always injected into the stance hint so agents remain oriented to the discussion question regardless of what the preceding message was. Both main entry points maintain a `last_message_to[(speaker, listener)]` dict for this; the key is directed so that role swaps (B becomes expresser where A was before) are handled correctly.
 
 ### 5. Softmax inverse temperature β replaces temperature τ
 

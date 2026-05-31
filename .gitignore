@@ -4,5 +4,6 @@ __pycache__/
 *.pyc
 .env
 myvenv/
-*.json
+german_personas.json
+ZA9089_JSON.xlsx
 expose-latex/

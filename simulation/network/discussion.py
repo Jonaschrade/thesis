@@ -14,6 +14,14 @@ followed by reward classification.  The reward signal drives two mechanisms:
   current asymmetric implementation only ``reward_a`` is passed to
   ``update_edge``; ``reward_b`` is available for a future symmetric extension.
 
+On the first meeting between a pair, the expresser responds to the moderator's
+topic.  On subsequent meetings, the caller passes ``prior_b_message`` — the
+last message agent_b sent to agent_a in a previous exchange — so agent_a's
+first turn continues the ongoing dialogue rather than restarting from the
+moderator's prompt.  The topic text is always forwarded to every ``respond()``
+call via the stance hint, so agents remain oriented to the discussion question
+regardless of what the immediately preceding message was.
+
 The classifier reward is kept causally separate from ``respond()`` (no shared
 prompt context) to avoid self-scoring contamination (Chuang et al. 2024).
 """
@@ -32,6 +40,7 @@ def run_discussion(
     verbose: bool = True,
     opinion_a: int | None = None,
     opinion_b: int | None = None,
+    prior_b_message: str | None = None,
 ) -> dict:
     """Run a pairwise discussion between two agents and collect reward signals.
 
@@ -41,6 +50,14 @@ def run_discussion(
     opinion (``opinion_a`` / ``opinion_b``) when provided — these are the
     actual softmax-drawn stances for this interaction, distinct from the
     deterministic ``preferred_opinion`` (argmax) tracked on ``AgentOpinionState``.
+
+    When ``prior_b_message`` is provided, it is appended to the transcript
+    after the moderator opening, so agent_a's first turn continues from
+    agent_b's last message in the previous exchange rather than reacting to
+    the moderator.  This makes repeated meetings between the same pair a
+    continuation of their ongoing dialogue.  The topic is always passed to
+    ``respond()`` via the stance-hint so agents remain oriented regardless of
+    what the immediately preceding message was.
 
     After the last turn, classifier rewards are computed:
 
@@ -69,6 +86,11 @@ def run_discussion(
         anchor the agent's utterance.  None disables anchoring.
     opinion_b:
         Actual expressed stance for agent_b.  Same semantics as ``opinion_a``.
+    prior_b_message:
+        Last message agent_b sent in a previous exchange with agent_a.
+        When provided, agent_a responds to this message instead of the
+        moderator's topic, making the interaction a continuation of the
+        prior dialogue.  None on the first meeting (default).
 
     Returns
     -------
@@ -93,6 +115,9 @@ def run_discussion(
             The label passed in via ``topic_label``.
     """
     transcript: list[dict] = [{"speaker": "Moderator", "content": topic}]
+    if prior_b_message is not None:
+        transcript.append({"speaker": agent_b.name, "content": prior_b_message})
+
     total_turns = turns_per_agent * 2
 
     for i in range(total_turns):
@@ -104,7 +129,10 @@ def run_discussion(
             expressed = opinion_b
 
         last = transcript[-1]
-        reply = speaker.respond(last["content"], last["speaker"], expressed_opinion=expressed)
+        reply = speaker.respond(
+            last["content"], last["speaker"],
+            expressed_opinion=expressed, topic=topic,
+        )
         if verbose:
             print(f"\n{speaker.name}: {reply}")
         transcript.append({"speaker": speaker.name, "content": reply})
