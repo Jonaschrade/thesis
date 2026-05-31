@@ -395,8 +395,6 @@ The main experiments hold the graph fixed (`GRAPH_DYNAMIC = False`) to isolate o
 
 Known failure modes: (1) the graph crystallising before Q-values diverge — keep `STRENGTH_DELTA` small relative to `LEARNING_RATE`; (2) premature edge drops before the history window fills — cold-start signal defaults to 0.0 (neutral) until `REWARD_WINDOW_M` interactions have accumulated on that edge.
 
-The further extension toward the full Jacob & Banisch (2023) virtual-worlds model (parallel real-world / virtual-worlds networks with login probability λ) is out of scope for the main experiments. It slots in by replacing the neighbour set passed to `select_responder()`.
-
 ---
 
 ## References
