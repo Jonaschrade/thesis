@@ -2,7 +2,7 @@
 
 A thesis research project implementing a hybrid LLM + Social Feedback Theory (SFT) simulation of opinion dynamics in structured social networks — powered by local LLMs via [Ollama](https://ollama.ai).
 
-**Research question:** Can Social Feedback Theory serve as an explicit, parameterised reinforcement-learning governor for LLM agents embedded in a structured graph, producing opinion dynamics that are both more mechanistically interpretable than free-form LLM-ABMs and more behaviourally realistic than classical SFT?
+**Research question:** Can Social Feedback Theory serve as underlying reinforcement-learning mechanism for LLM agents embedded in a structured social network such that the resulting hybrid model preserves SFT's analytic interpretability while extending the empirical scope?
 
 The project provides two simulation modes:
 
