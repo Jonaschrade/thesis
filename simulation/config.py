@@ -17,7 +17,7 @@ import os
 
 # ── Models ───────────────────────────────────────────────────────────────────
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "127.0.0.1:11434")
-LLM_MODEL   = "qwen2.5:14b"       # swap depending on available RAM
+LLM_MODEL   = "qwen3.5:9b"       # swap depending on available RAM
 EMBED_MODEL = "nomic-embed-text"   # embedding model for vector memory
 
 # ── Memory ───────────────────────────────────────────────────────────────────
