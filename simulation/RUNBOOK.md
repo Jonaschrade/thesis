@@ -1,7 +1,7 @@
 # RUNBOOK — Thesis-Simulation auf SCCKN
 
 Anleitung, um nach einem Login auf `scc2` (oder nach einem Crash) die Simulation
-wieder ans Laufen zu bringen. Setup ist einmalig erfolgt; dieses Runbook
+wieder zum Laufen zu bringen. Setup ist einmalig erfolgt; dieses Runbook
 beschreibt nur den wiederkehrenden Startvorgang.
 
 ---

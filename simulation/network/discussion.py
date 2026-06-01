@@ -140,16 +140,30 @@ def run_discussion(
     # Exclude the moderator opening from reward extraction
     convo = transcript[1:]
 
-    # Classifier reward: each agent classifies the partner's last message.
-    # Extracted without persona or full-transcript context.
+    # Isolate only the turns spoken in this discussion (excludes prior_b_message).
+    # transcript[-total_turns:] is always the actual discussion turns regardless
+    # of whether prior_b_message was prepended.
+    discussion_turns = transcript[-total_turns:]
+
+    # Classifier reward: expression = first utterance by the expressing agent
+    # in this discussion; reaction = last utterance by the reacting agent.
+    # With turns_per_agent=1 first==last for each agent, so reward_a is correct
+    # and reward_b remains semantically unavailable (agent_a never reacted to
+    # agent_b's only turn). With turns_per_agent>=2 both rewards are meaningful.
+    first_a_msg = next(
+        t["content"] for t in discussion_turns if t["speaker"] == agent_a.name
+    )
+    first_b_msg = next(
+        t["content"] for t in discussion_turns if t["speaker"] == agent_b.name
+    )
     last_b_msg = next(
-        t["content"] for t in reversed(convo) if t["speaker"] == agent_b.name
+        t["content"] for t in reversed(discussion_turns) if t["speaker"] == agent_b.name
     )
     last_a_msg = next(
-        t["content"] for t in reversed(convo) if t["speaker"] == agent_a.name
+        t["content"] for t in reversed(discussion_turns) if t["speaker"] == agent_a.name
     )
-    reward_a = agent_a.classify_reward(last_b_msg)
-    reward_b = agent_b.classify_reward(last_a_msg)
+    reward_a = agent_a.classify_reward(first_a_msg, last_b_msg)
+    reward_b = agent_b.classify_reward(first_b_msg, last_a_msg)
 
     print(f"\n  🎯 Reward  {agent_a.name}: {reward_a:+.2f}  |  {agent_b.name}: {reward_b:+.2f}")
 

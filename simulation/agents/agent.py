@@ -181,7 +181,7 @@ class Agent:
 
     # classify_reward --------------------------------------------------------
 
-    def classify_reward(self, reaction_text: str) -> float:
+    def classify_reward(self, expression_text, reaction_text: str) -> float:
         """Classify a partner's reaction as a scalar reward in [−1.0, 1.0].
 
         This is the social feedback signal r that drives the SFT Q-value
@@ -197,18 +197,27 @@ class Agent:
         binary SFT cannot represent.
 
         Args:
-            reaction_text: The partner's most recent message text.
+            expression_text: The agent's own first utterance in the discussion
+                — anchors what position the partner was reacting to.
+            reaction_text: The partner's last utterance in the discussion.
 
         Returns:
             float in [−1.0, 1.0].  Positive = agreement, negative = disagreement.
         """
         raw = self.llm.invoke(
-            f"Bewerte die folgende Aussage: Drückt sie Zustimmung oder Ablehnung aus?\n\n"
-            f"Aussage: \"{reaction_text}\"\n\n"
-            f"Antworte nur mit einer einzigen Zahl zwischen -1.0 und 1.0:\n"
-            f"  1.0 = klare Zustimmung\n"
-            f"  0.0 = ambivalent oder unklar\n"
-            f" -1.0 = klare Ablehnung"
+            f"Aussage: \"{expression_text}\"\n\n"
+            f"Reaktion: \"{reaction_text}\"\n\n"
+            f"Aufgabe: Bewerte, ob die Reaktion Zustimmung oder Ablehnung "
+            f"gegenüber der Aussage ausdrückt.\n\n"
+            f"Skala (benutze einen Dezimalpunkt, kein Komma):\n"
+            f"   1.0 = klare Zustimmung\n"
+            f"   0.5 = eher Zustimmung\n"
+            f"   0.0 = neutral, ambivalent oder unklar\n"
+            f"  -0.5 = eher Ablehnung\n"
+            f"  -1.0 = klare Ablehnung\n"
+            f"Zwischenwerte wie 0.3 oder -0.7 sind ausdrücklich erlaubt.\n\n"
+            f"Antworte ausschließlich mit der Zahl, ohne weiteren Text, "
+            f"ohne Erklärung."
         ).strip()
         try:
             return max(-1.0, min(1.0, float(raw.split()[0].replace(",", "."))))
