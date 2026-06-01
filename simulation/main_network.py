@@ -122,7 +122,7 @@ def _build_initial_graph(agent_names: list[str]) -> nx.Graph:
 
 def main() -> None:
     """Run the full network simulation."""
-    llm = OllamaLLM(model=LLM_MODEL, base_url=f"http://{OLLAMA_HOST}", reasoning=False, num_ctx=8192)
+    llm = OllamaLLM(model=LLM_MODEL, base_url=f"http://{OLLAMA_HOST}")
     logger = SimulationLogger()
 
     # ── Agent initialisation ─────────────────────────────────────────────

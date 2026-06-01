@@ -89,7 +89,7 @@ from network.opinion import (
 
 def main() -> None:
     """Run the two-agent pairwise simulation with full SFT Q-value tracking."""
-    llm = OllamaLLM(model=LLM_MODEL, base_url=f"http://{OLLAMA_HOST}", reasoning=False, num_ctx=8192)
+    llm = OllamaLLM(model=LLM_MODEL, base_url=f"http://{OLLAMA_HOST}")
     logger = SimulationLogger()
 
     # ── Agent initialisation ─────────────────────────────────────────────
