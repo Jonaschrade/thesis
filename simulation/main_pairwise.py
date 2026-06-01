@@ -63,7 +63,6 @@ from agents.agent import Agent
 from agents.personas import sample_personas
 from config import (
     GRAPH_DYNAMIC,
-    INTERACTIONS_PER_ROUND,
     LEARNING_RATE,
     LLM_MODEL,
     NETWORK_MAX_ROUNDS,
@@ -76,6 +75,8 @@ from config import (
     TOPIC_LABEL,
     TOPIC_TEXT,
 )
+# Set to two for pairwise simulation
+INTERACTIONS_PER_ROUND=2
 from network.discussion import run_discussion
 from network.logger import SimulationLogger
 from network.opinion import (
