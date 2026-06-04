@@ -164,8 +164,8 @@ def main() -> None:
     for round_n in range(1, NETWORK_MAX_ROUNDS + 1):
         state.round = round_n
 
-        n_pos = sum(1 for s in state.opinion_states.values() if s.preferred_opinion == 1)
-        n_neg = NUM_AGENTS - n_pos
+        n_pos = sum(1 for s in state.opinion_states.values() if s.q_pos > s.q_neg)
+        n_neg = sum(1 for s in state.opinion_states.values() if s.q_neg > s.q_pos)
 
         print(f"\n{'━' * 60}")
         print(

@@ -120,8 +120,8 @@ def main() -> None:
     # ── Main simulation loop ─────────────────────────────────────────────
     terminated_early = False
     for round_n in range(1, NETWORK_MAX_ROUNDS + 1):
-        n_pos = sum(1 for s in opinion_states.values() if s.preferred_opinion == 1)
-        n_neg = len(agents) - n_pos
+        n_pos = sum(1 for s in opinion_states.values() if s.q_pos > s.q_neg)
+        n_neg = sum(1 for s in opinion_states.values() if s.q_neg > s.q_pos)
         strength_str = (
             f"  │  strengths: {a_name} {strength[a_name]:.2f} / {b_name} {strength[b_name]:.2f}"
             if GRAPH_DYNAMIC else ""

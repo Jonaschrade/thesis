@@ -113,14 +113,14 @@ Every `round_NNNN.json` snapshot now contains:
 }
 ```
 
-`opinion_states` records the full Q-trajectory for every agent, enabling the interpretability check: regressing Q-gap trajectories against observed opinion switches to test whether the SFT layer genuinely governs the LLM's expressed positions.  `"preferred"` is the deterministic argmax (`preferred_opinion` property); `"expressed"` is the actual softmax-drawn stance from the agent's last interaction as expresser in the round (absent if not selected as expresser).
+`opinion_states` records the full Q-trajectory for every agent, enabling the interpretability check: regressing Q-gap trajectories against observed opinion switches to test whether the SFT layer genuinely governs the LLM's expressed positions.  `"preferred"` is the deterministic argmax (`preferred_opinion` property); `"expressed"` is the actual softmax-drawn stance from the agent's last interaction as expresser in the round (absent if not selected as expresser).  `n_pos`/`n_neg` in `metrics` count agents with a strict positive/negative Q-gap (`q_pos > q_neg` and `q_neg > q_pos` respectively); tied/neutral agents (equal Q-values) are excluded from both, so `n_pos + n_neg ≤ total agents`.
 
 Each `discussion` record in `events.jsonl` also carries all four stance fields for the expresser (a) and responder (b):
 
 | Field | Meaning |
 |---|---|
 | `expressed_a` / `expressed_b` | Actual softmax-drawn stances for this interaction |
-| `preferred_a` / `preferred_b` | Deterministic argmax (pre-Q-update) going into this interaction |
+| `preferred_a` / `preferred_b` | Deterministic argmax (pre-Q-update) going into this interaction — note: distinct from n_pos/n_neg counts, which use strict Q-gap comparisons |
 
 This allows per-interaction analysis without cross-referencing the round snapshot.
 

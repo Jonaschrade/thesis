@@ -190,9 +190,11 @@ def compute_polarization_metrics(
     -------
     dict with keys:
         n_pos : int
-            Agents whose preferred opinion is +1 (argmax).
+            Agents with a strict positive Q-gap (q_pos > q_neg).
         n_neg : int
-            Agents whose preferred opinion is −1 (argmax).
+            Agents with a strict negative Q-gap (q_neg > q_pos).
+            Agents with equal Q-values (neutral/tied) are excluded from both
+            counts; n_pos + n_neg ≤ total agents.
         dispersion : float
             Variance of preferred opinions in {−1, +1}.  Ranges from 0
             (full consensus) to 1 (maximally split population).
@@ -205,8 +207,8 @@ def compute_polarization_metrics(
 
     opinions = [s.preferred_opinion for s in opinion_states.values()]
     n = len(opinions)
-    n_pos = sum(1 for o in opinions if o == 1)
-    n_neg = n - n_pos
+    n_pos = sum(1 for s in opinion_states.values() if s.q_pos > s.q_neg)
+    n_neg = sum(1 for s in opinion_states.values() if s.q_neg > s.q_pos)
     mean_opinion = sum(opinions) / n
     dispersion = sum((o - mean_opinion) ** 2 for o in opinions) / n
     mean_q_gap = sum(abs(s.q_gap) for s in opinion_states.values()) / n

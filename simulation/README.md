@@ -260,14 +260,14 @@ For each round (INTERACTIONS_PER_ROUND asymmetric interactions; expresser drawn 
 
 | Banisch & Olbrich (2019) concept | This simulation |
 |---|---|
-| Public opinion o_i ∈ {−1, +1} | Drawn by `softmax_opinion(β)`; deterministic preferred indicator is `preferred_opinion` = `argmax(q_pos, q_neg)` |
+| Public opinion o_i ∈ {−1, +1} | Drawn by `softmax_opinion(β)`; deterministic preferred indicator is `preferred_opinion` = `argmax(q_pos, q_neg)` (logged as `preferred_a/b`); round-opener and snapshot counts use strict Q-gap comparisons (`q_pos > q_neg` / `q_neg > q_pos`), so tied/neutral agents are excluded from n_pos and n_neg |
 | Social reward r = o_i · o_j ∈ {−1, +1} | `classify_reward()` output ∈ [−1.0, 1.0] — continuous, preserves ambivalence |
 | Q-value update Q(o_i) ← (1−α)·Q(o_i) + α·r | `update_q_value(expressed, reward, α)` — expresser only, per interaction |
 | Asymmetric one-directional update | One expresser drawn per event; only their Q updates (Jacob & Banisch 2023) |
 | Homophily partner selection | `select_responder(h)` — h=0 uniform (2019), h>0 conviction-similarity weighted (2023) |
 | Network co-evolution (endogenous) | `GRAPH_DYNAMIC = True` — extension mode |
 | Phase transition via modularity | `SBM_P_INTER` sweep — primary experimental variable |
-| Structural polarization | `dispersion`, `n_pos/n_neg` in round snapshots |
+| Structural polarization | `dispersion`, `n_pos/n_neg` in round snapshots; n_pos/n_neg count agents with strict positive/negative Q-gap, excluding neutral agents |
 
 The continuous reward on [−1, +1] is a deliberate extension of Banisch's binary ±1, preserving ambivalent feedback that Sárközi et al. (2022) found most influential in empirical tests.
 
